@@ -58,6 +58,22 @@ flowchart TD
 - `graphify`: Python 3.10+ (`uv tool install graphifyy` or `pip install graphifyy`).
 - MCPs (Linear/Jira, Figma, Sentry, Slack, a DB) are all optional — every skill degrades gracefully to whatever is connected.
 
+## Recommended companions
+
+Skills from other collections that pair well with this set — linked, not vendored; read a skill before installing it (a skill is instructions your agent will follow):
+
+| Skill | Source | Why |
+|---|---|---|
+| `mcp-builder` | [anthropics/skills](https://github.com/anthropics/skills/tree/main/skills/mcp-builder) (Apache-2.0) | Building MCP servers properly — tool design, auth, transports. |
+| `sentry-workflow` / `sentry-fix-issues` | [getsentry/sentry-for-ai](https://github.com/getsentry/sentry-for-ai) (MIT) | Sentry-native triage-and-fix against live issues; alert plumbing into Slack/PagerDuty. |
+| `webapp-testing` | [anthropics/skills](https://github.com/anthropics/skills/tree/main/skills/webapp-testing) (Apache-2.0) | Scripted Playwright test flows — the automated sibling of `qa-run`'s manual pass. |
+| `linear`, `gh-fix-ci`, `notion-spec-to-implementation` | [openai/skills](https://github.com/openai/skills) (per-skill LICENSE, mostly Apache-2.0) | Linear workflow hygiene, CI-failure forensics, Notion spec → implementation plan. Plain spec-conformant SKILL.md — loads in Claude Code unmodified. |
+| `app-store-connect-skill` | [199-biotechnologies/app-store-connect-skill](https://github.com/199-biotechnologies/app-store-connect-skill) (MIT) | TestFlight tester/group management and releases from the terminal. Low-star personal repo — review before trusting it with ASC keys. |
+| `xcuitest-skill`, `api-skill` | [LambdaTest/agent-skills](https://github.com/LambdaTest/agent-skills) (MIT) | Generate XCUITest suites for iOS; design/mock/test REST APIs. |
+| `static-analysis` | [trailofbits/skills](https://github.com/trailofbits/skills) (CC-BY-SA) | CodeQL/Semgrep orchestration from a top security firm. Copyleft — use, don't redistribute. |
+
+Browse more: [agentskills.io](https://agentskills.io) (the spec + client list), [VoltAgent/awesome-agent-skills](https://github.com/VoltAgent/awesome-agent-skills), [hesreallyhim/awesome-claude-code](https://github.com/hesreallyhim/awesome-claude-code).
+
 ## Credits
 
 - `ticket`, `qa-run`, `playwright-qa`, and the `agents/` crew are adapted from [unisol1020/ai-tools](https://github.com/unisol1020/ai-tools) by Max — thanks 🙏
