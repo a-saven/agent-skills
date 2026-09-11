@@ -1,0 +1,40 @@
+{
+  "//": "Copy to <project-root>/.claude/qa.local.json. The qa-run skill writes/reads this for you — you rarely edit it by hand. It is gitignored: LOCAL-DEV credentials only, never commit, never use prod creds. URLs + credentials are PER APP (a monorepo has several); the DB is project-level.",
+
+  "version": 1,
+
+  "apps": [
+    {
+      "name": "web-a",
+      "url": "http://localhost:3000",
+      "credentials": {
+        "//status": "set = use these | declined = user said no for this app, never ask again",
+        "status": "set",
+        "loginUrl": "http://localhost:3000/login",
+        "username": "you@example.com",
+        "password": "local-dev-password-only"
+      }
+    },
+    {
+      "name": "web-b",
+      "url": "http://localhost:3001",
+      "credentials": { "status": "declined" }
+    },
+    {
+      "name": "web-c",
+      "url": "http://localhost:3002",
+      "credentials": { "status": "set", "loginUrl": "http://localhost:3002/login", "username": "you@example.com", "password": "local-dev-password-only" }
+    }
+  ],
+
+  "db": {
+    "//status": "set = use it | declined = never ask again | no-mcp = no DB MCP connected",
+    "//access": "mcp = read via a DB MCP (e.g. Supabase) | psql = read via psql against the url below",
+    "//env": "local/dev expected. prod only if YOU accepted the risk — read-only queries regardless.",
+    "status": "set",
+    "access": "mcp",
+    "tool": "mcp__<server>__<readonly_sql_tool>",
+    "url": "postgres://user:pass@localhost:5432/dev",
+    "env": "local"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "//": "Copy to <project-root>/.claude/tickets.local.json. The ticket skill writes/reads this for you — you rarely edit it by hand. It holds NO secrets (just the tracker choice + team/project mapping), so you MAY commit it instead as .claude/tickets.json to share the mapping with your team. If both exist, tickets.local.json wins.",
+
+  "version": 1,
+
+  "//tracker": "linear | jira — detected on first run, then remembered",
+  "tracker": "linear",
+
+  "linear": {
+    "team":    { "id": "team_xxx", "key": "ENG", "name": "Engineering" },
+    "project": { "id": "proj_xxx", "name": "Web app" },
+    "defaultLabels": ["bug"]
+  },
+
+  "jira": {
+    "cloudId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "project": { "key": "PROJ", "name": "Product" },
+    "defaultIssueType": "Bug"
+  }
+}
