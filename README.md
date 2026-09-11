@@ -13,6 +13,7 @@ Skills follow the [Agent Skills](https://github.com/anthropics/skills) format (`
 | [`qa-run`](skills/qa-run/SKILL.md) | skill | Per-project QA orchestrator: remembers dev URL + login per app, then dispatches the `manual-qa` agent against the running app — web or iOS Simulator. |
 | [`playwright-qa`](skills/playwright-qa/SKILL.md) | skill | The browser-driving playbook `manual-qa` follows (navigate → snapshot → act → assert, forced error states, mobile viewports). |
 | [`graphify`](skills/graphify/SKILL.md) | skill | Any folder of code/docs/papers/media → persistent knowledge graph with community detection, god nodes, and `query` / `path` / `explain` tools. Wraps the [graphify](https://github.com/sponsors/safishamsi) Python package. |
+| [`worktree-graphs`](skills/worktree-graphs/SKILL.md) | skill + [`bin/graphs`](bin/graphs) CLI | Keeps a **CodeGraph index + graphify graph alive in every git worktree** — reflink-clones main's index into fresh worktrees (3 copies of a 251 MB db = 8 KB) and syncs the branch delta, so sessions there never silently fall back to grep. `graphs status` shows one row per worktree. CodeGraph and graphify are complementary: CodeGraph is the branch-accurate "where is X / who calls X" index; graphify is the architectural overview. |
 | [`agents/`](agents/) | subagents | The crew `orchestrate` delegates to: `architect`, `backend-engineer`, `frontend-engineer`, `automation-qa`, `backend-reviewer`, `frontend-reviewer`, `security-reviewer`, and `manual-qa` (drives a real browser or the iOS Simulator; reports PASS/FAIL with evidence). Engineers write code but not tests, the test author writes tests but not code, reviewers only report — that separation is what makes the chain safe to automate. |
 
 ## Install
@@ -56,6 +57,7 @@ flowchart TD
 - [Claude Code](https://claude.com/claude-code) and `git` for the full install; skills alone need only an agent that reads `SKILL.md`.
 - `qa-run` / `manual-qa`: Node.js for the Playwright MCP (`claude mcp add -s user playwright -- npx @playwright/mcp@latest --headless`); Xcode + Simulator for native iOS runs.
 - `graphify`: Python 3.10+ (`uv tool install graphifyy` or `pip install graphifyy`).
+- `worktree-graphs`: the CodeGraph CLI (`npm i -g @colbymchenry/codegraph`, then `codegraph init` once per repo; `codegraph install -y` wires its MCP into Claude Code). The installer also adds a SessionStart hook that runs `graphs ensure` so fresh worktrees seed themselves.
 - MCPs (Linear/Jira, Figma, Sentry, Slack, a DB) are all optional — every skill degrades gracefully to whatever is connected.
 
 ## Recommended companions
@@ -76,14 +78,15 @@ Browse more: [agentskills.io](https://agentskills.io) (the spec + client list), 
 
 ## Credits
 
-- `ticket`, `qa-run`, `playwright-qa`, and the `agents/` crew are adapted from [unisol1020/ai-tools](https://github.com/unisol1020/ai-tools) by Max — thanks 🙏
+- `ticket`, `qa-run`, `playwright-qa`, `worktree-graphs` + `graphs`, and the `agents/` crew are adapted from [unisol1020/ai-tools](https://github.com/unisol1020/ai-tools) by Max, who I build this stack with — thanks 🙏
 - `graphify` (the skill) wraps the [graphifyy](https://pypi.org/project/graphifyy/) package by [safishamsi](https://github.com/safishamsi).
 - `orchestrate` is mine.
 
 ## Uninstall
 
 ```bash
-for s in orchestrate ticket qa-run playwright-qa graphify; do rm -f ~/.claude/skills/$s; done
+for s in orchestrate ticket qa-run playwright-qa graphify worktree-graphs; do rm -f ~/.claude/skills/$s; done
+rm -f ~/.claude/bin/graphs ~/.local/bin/graphs   # plus the SessionStart "graphs ensure" hook in ~/.claude/settings.json
 for a in architect backend-engineer frontend-engineer automation-qa backend-reviewer frontend-reviewer security-reviewer manual-qa; do rm -f ~/.claude/agents/$a.md; done
 rm -rf ~/.agent-skills
 ```

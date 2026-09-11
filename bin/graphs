@@ -1,0 +1,207 @@
+#!/bin/sh
+# graphs — give every git worktree a working CodeGraph index + Graphify graph, for free.
+set -u
+
+find_bin() {
+  n=$1; shift
+  b=$(command -v "$n" 2>/dev/null) && [ -n "$b" ] && { echo "$b"; return 0; }
+  for p in "$@"; do [ -x "$p" ] && { echo "$p"; return 0; }; done
+  return 0
+}
+CODEGRAPH=${CODEGRAPH_BIN:-$(find_bin codegraph "$HOME/.volta/bin/codegraph" "$HOME/.local/bin/codegraph" "$HOME/.bun/bin/codegraph" /usr/local/bin/codegraph /opt/homebrew/bin/codegraph)}
+GRAPHIFY=${GRAPHIFY_BIN:-$(find_bin graphify $HOME/Library/Python/*/bin/graphify "$HOME/.local/bin/graphify" /usr/local/bin/graphify /opt/homebrew/bin/graphify)}
+
+here() { git rev-parse --show-toplevel 2>/dev/null; }
+
+main_root() {
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || return 1
+  [ -n "$top" ] || return 1
+  d=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  # Old git (<2.31) echoes the unknown flag back instead of failing, so trust the
+  # answer only when it names a directory that exists.
+  case "$d" in /*) [ -d "$d" ] || d="";; *) d="";; esac
+  if [ -n "$d" ]; then
+    p=$(dirname "$d")
+    [ -d "$p" ] && [ -e "$p/.git" ] && { echo "$p"; return 0; }
+  fi
+  echo "$top"
+}
+
+# git emits worktree paths raw, so a path containing a space breaks `awk '{print $2}'`.
+worktrees() { git -C "$1" worktree list --porcelain | sed -n 's/^worktree //p'; }
+short() { echo "$1" | sed "s|^$HOME|~|"; }
+mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+
+# APFS/btrfs reflink: a 251MB index copies in ~4ms and shares blocks until written.
+clone() { cp -c "$1" "$2" 2>/dev/null || cp --reflink=auto "$1" "$2" 2>/dev/null || cp "$1" "$2"; }
+
+# 0 = seeded, 1 = nothing to do, 2 = tried and failed
+seed_codegraph() {
+  wt=$1; main=$2
+  [ -f "$main/.codegraph/codegraph.db" ] || return 1
+  [ -f "$wt/.codegraph/codegraph.db" ] && return 1
+  mkdir -p "$wt/.codegraph" 2>/dev/null || return 2
+  lock="$wt/.codegraph/.seed.lock"
+  find "$lock" -maxdepth 0 -mmin +30 -exec rmdir {} \; 2>/dev/null
+  mkdir "$lock" 2>/dev/null || return 1
+  rc=2
+  # Flush main's WAL first, or the clone can miss pages that were never checkpointed.
+  command -v sqlite3 >/dev/null 2>&1 && sqlite3 "$main/.codegraph/codegraph.db" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null 2>&1
+  if clone "$main/.codegraph/codegraph.db" "$wt/.codegraph/codegraph.db"; then
+    [ -s "$main/.codegraph/codegraph.db-wal" ] && clone "$main/.codegraph/codegraph.db-wal" "$wt/.codegraph/codegraph.db-wal"
+    # A copy taken mid-write is torn, not merely stale: drop it rather than serve it.
+    if ! command -v sqlite3 >/dev/null 2>&1 || sqlite3 "$wt/.codegraph/codegraph.db" "select count(*) from files;" >/dev/null 2>&1; then
+      [ -f "$main/.codegraph/.gitignore" ] && clone "$main/.codegraph/.gitignore" "$wt/.codegraph/.gitignore"
+      rc=0
+    else
+      rm -f "$wt/.codegraph/codegraph.db" "$wt/.codegraph/codegraph.db-wal"
+    fi
+  fi
+  rmdir "$lock" 2>/dev/null
+  return $rc
+}
+
+seed_graphify() {
+  wt=$1; main=$2
+  [ -f "$main/graphify-out/graph.json" ] || return 1
+  [ -f "$wt/graphify-out/graph.json" ] && return 1
+  mkdir -p "$wt/graphify-out" 2>/dev/null || return 2
+  clone "$main/graphify-out/graph.json" "$wt/graphify-out/graph.json.part" || return 2
+  for f in GRAPH_REPORT.md .graphify_python; do
+    [ -f "$main/graphify-out/$f" ] && clone "$main/graphify-out/$f" "$wt/graphify-out/$f"
+  done
+  # Graphify node ids embed the main checkout's absolute path, so re-extracting inside a
+  # worktree would duplicate every node. Worktrees get a read-only architectural snapshot;
+  # only main refreshes it. Branch-accurate symbol lookup is codegraph's job, not this one.
+  : > "$wt/graphify-out/.snapshot-from-main"
+  # Publish last: a half-copied graph must never look like a finished one.
+  mv "$wt/graphify-out/graph.json.part" "$wt/graphify-out/graph.json" || return 2
+  touch "$wt/graphify-out/graph.json"
+  return 0
+}
+
+graphify_refresh_main() {
+  root=$1
+  [ -f "$root/graphify-out/graph.json" ] || return 0
+  [ -f "$root/graphify-out/.snapshot-from-main" ] && return 0
+  [ -f "$root/.claude/graphify-sync.sh" ] || return 0
+  head=$(git -C "$root" rev-parse HEAD 2>/dev/null) || return 0
+  [ "$head" = "$(cat "$root/graphify-out/.synced-sha" 2>/dev/null)" ] && return 0
+  lock="$root/graphify-out/.refresh.lock"
+  find "$lock" -maxdepth 0 -mmin +60 -exec rmdir {} \; 2>/dev/null
+  # Without this, every session opened before the first rebuild finishes starts another.
+  mkdir "$lock" 2>/dev/null || return 0
+  ( cd "$root" && nohup nice -n 10 sh -c 'sh .claude/graphify-sync.sh; rmdir graphify-out/.refresh.lock 2>/dev/null' >/dev/null 2>&1 & ) >/dev/null 2>&1
+}
+
+cg_state() {
+  wt=$1
+  [ -f "$wt/.codegraph/codegraph.db" ] || { echo "MISSING"; return; }
+  [ -n "$CODEGRAPH" ] || { echo "present (codegraph not installed)"; return; }
+  j=$(cd "$wt" && "$CODEGRAPH" status --json 2>/dev/null)
+  [ -n "$j" ] || { echo "present (unreadable)"; return; }
+  f=$(printf '%s' "$j" | sed -n 's/.*"fileCount":\([0-9]*\).*/\1/p')
+  n=$(printf '%s' "$j" | sed -n 's/.*"nodeCount":\([0-9]*\).*/\1/p')
+  p=$(printf '%s' "$j" | sed -n 's/.*"pendingChanges":{"added":\([0-9]*\),"modified":\([0-9]*\),"removed":\([0-9]*\)}.*/\1+\2+\3/p')
+  pend=$(echo "${p:-0+0+0}" | awk -F+ '{print $1+$2+$3}')
+  mm=""
+  printf '%s' "$j" | grep -q '"worktreeMismatch":null' || mm=" BORROWED-INDEX"
+  if [ "${pend:-0}" -gt 0 ]; then echo "${f}f/${n}n +${pend} pending$mm"; else echo "${f}f/${n}n fresh$mm"; fi
+}
+
+gf_state() {
+  wt=$1
+  [ -f "$wt/graphify-out/graph.json" ] || { echo "MISSING"; return; }
+  [ -f "$wt/graphify-out/.snapshot-from-main" ] && { echo "snapshot(main)"; return; }
+  s=$(cat "$wt/graphify-out/.synced-sha" 2>/dev/null)
+  h=$(git -C "$wt" rev-parse HEAD 2>/dev/null)
+  if [ -n "$s" ] && [ "$s" = "$h" ]; then echo "fresh"; return; fi
+  if [ -n "$s" ]; then
+    b=$(git -C "$wt" rev-list --count "$s..HEAD" 2>/dev/null)
+    echo "STALE (${b:-?} commits behind)"; return
+  fi
+  echo "own build, $(( ( $(date +%s) - $(mtime "$wt/graphify-out/graph.json") ) / 86400 ))d old"
+}
+
+cmd_ensure() {
+  wt=$(here) || exit 0
+  [ -n "$wt" ] || exit 0
+  main=$(main_root) || exit 0
+  if [ "$wt" != "$main" ]; then
+    seed_codegraph "$wt" "$main"
+    seed_graphify "$wt" "$main"
+  else
+    # Only a session in main refreshes main's graph; a worktree must not rebuild it.
+    graphify_refresh_main "$main"
+  fi
+  [ -d "$wt/.codegraph" ] && [ -n "$CODEGRAPH" ] && \
+    ( cd "$wt" && nohup nice -n 10 "$CODEGRAPH" sync >/dev/null 2>&1 & ) >/dev/null 2>&1
+  exit 0
+}
+
+cmd_status() {
+  main=$(main_root) || { echo "not a git repo"; exit 1; }
+  echo "codegraph: ${CODEGRAPH:-NOT INSTALLED}"
+  echo "graphify:  ${GRAPHIFY:-NOT INSTALLED}"
+  echo
+  worktrees "$main" | while IFS= read -r w; do
+    [ -d "$w" ] || { printf 'gone      %s\n          (listed but not on disk — run: git worktree prune)\n' "$(short "$w")"; continue; }
+    br=$(git -C "$w" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    [ "$w" = "$main" ] && tag="main    " || tag="worktree"
+    printf '%s  %s\n' "$tag" "$(short "$w")"
+    printf '          %-42s cg: %-30s gf: %s\n' "${br:-detached}" "$(cg_state "$w")" "$(gf_state "$w")"
+  done
+}
+
+cmd_seed() {
+  # Clone only. The reflink costs ~0, but `codegraph sync` rewrites enough pages to
+  # break block sharing and materialise the full ~300MB — so syncing is left to the
+  # worktree you actually open (SessionStart `ensure`), not paid for all of them here.
+  main=$(main_root) || exit 1
+  worktrees "$main" | while IFS= read -r w; do
+    [ "$w" = "$main" ] && continue
+    [ -d "$w" ] || continue
+    seed_codegraph "$w" "$main"; a=$?
+    seed_graphify "$w" "$main"; b=$?
+    label() { case $1 in 0) echo seeded;; 1) echo "-";; *) echo FAILED;; esac; }
+    printf 'codegraph:%-7s graphify:%-7s %s\n' "$(label $a)" "$(label $b)" "$(short "$w")"
+  done
+  echo '("-" = already present or nothing to copy; indexes sync on first session in each worktree)'
+}
+
+cmd_prune() {
+  only_merged=no
+  case "${1:-}" in
+    "") ;;
+    --merged) only_merged=yes;;
+    *) echo "unknown option: $1 (expected --merged)"; exit 2;;
+  esac
+  main=$(main_root) || exit 1
+  worktrees "$main" | while IFS= read -r w; do
+    [ "$w" = "$main" ] && continue
+    [ -d "$w/.codegraph" ] || continue
+    if [ "$only_merged" = yes ]; then
+      br=$(git -C "$w" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      [ -n "$br" ] && [ "$br" != HEAD ] || continue
+      git -C "$main" merge-base --is-ancestor "$br" HEAD 2>/dev/null || continue
+    fi
+    # A live daemon holds this index open; stop it before pulling the files out from under it.
+    [ -f "$w/.codegraph/daemon.pid" ] && [ -n "$CODEGRAPH" ] && \
+      ( cd "$w" && "$CODEGRAPH" daemon stop >/dev/null 2>&1 )
+    sz=$(du -sk "$w/.codegraph" 2>/dev/null | cut -f1)
+    rm -rf "$w/.codegraph"
+    printf 'removed %6s MB  %s\n' "$(( ${sz:-0} / 1024 ))" "$(short "$w")"
+  done
+  echo "(re-seed any of them for free with: graphs seed)"
+}
+
+case "${1:-ensure}" in
+  ensure)       cmd_ensure;;
+  status|check) cmd_status;;
+  seed)         cmd_seed;;
+  sync)         r=$(here); [ -n "$r" ] || { echo "not a git repo"; exit 1; }
+                [ -n "$CODEGRAPH" ] && ( cd "$r" && "$CODEGRAPH" sync )
+                m=$(main_root) && [ "$r" = "$m" ] && graphify_refresh_main "$m"; true;;
+  prune)        shift; cmd_prune "${1:-}";;
+  *) echo "usage: graphs [status|seed|sync|prune [--merged]|ensure]"; exit 2;;
+esac
