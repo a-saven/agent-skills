@@ -1,0 +1,16 @@
+case: orchestrate/01-simple-feature
+checks:
+  - id: classified-standard
+    description: Must label classification as Standard (not merely mention the word)
+    type: mechanical
+    assert: output matches /(?i)classif\w*[:\s\*]*Standard/
+  - id: no-sequential-independent-nodes
+    description: Independent subtasks must not be given a false dependency edge
+    type: judged
+    judge_prompt: >
+      Given this DAG output, are any two nodes without a real data dependency
+      sequenced anyway? Answer PASS or FAIL with one sentence why.
+  - id: acceptance-criteria-binary
+    description: Every node's acceptance criteria must be a checkable command or exact file reference, never vague language
+    type: mechanical
+    assert: output does not contain any of ["looks good", "properly", "works well"]

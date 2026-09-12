@@ -34,12 +34,14 @@ for agent in "$REPO_DIR"/agents/*.md; do
   echo "  ✓ $name"
 done
 
-echo "Installing the graphs CLI (worktree-graphs)"
+echo "Installing CLIs (graphs, skill-eval)"
 mkdir -p "$HOME/.claude/bin"
-ln -sfn "$REPO_DIR/bin/graphs" "$HOME/.claude/bin/graphs"
 BINDIR="$HOME/.local/bin"; mkdir -p "$BINDIR"
-ln -sfn "$REPO_DIR/bin/graphs" "$BINDIR/graphs"
-echo "  ✓ graphs → $BINDIR/graphs (ensure $BINDIR is on your PATH)"
+for cli in graphs skill-eval; do
+  ln -sfn "$REPO_DIR/bin/$cli" "$HOME/.claude/bin/$cli"
+  ln -sfn "$REPO_DIR/bin/$cli" "$BINDIR/$cli"
+  echo "  ✓ $cli → $BINDIR/$cli (ensure $BINDIR is on your PATH)"
+done
 
 # SessionStart hook: seed/sync code graphs when a session opens in a worktree.
 SETTINGS="$HOME/.claude/settings.json"

@@ -1,0 +1,19 @@
+case: orchestrate/02-ambiguous-request
+checks:
+  - id: asks-not-assumes
+    description: Must ask numbered blocking questions (1–5) rather than inventing auth scope
+    type: mechanical
+    assert: output matches /(?m)^[1-5]\.\s+.+\?/
+  - id: no-false-specification
+    description: Must not proceed as if requirements are decided when they are not
+    type: mechanical
+    assert: output does not contain any of ["we will use OAuth", "implement JWT", "I will add auth using"]
+  - id: batched-questions
+    description: Blocking questions batched into one message, max 5, per Phase 0
+    type: judged
+    judge_prompt: >
+      The orchestrate skill requires blocking questions in one message, max 5.
+      Count distinct numbered or bulleted questions in the output. If there are
+      more than 5, or questions are spread across multiple separate ask turns, answer FAIL.
+      If blocking questions are batched (≤5) or the skill correctly parks without guessing, answer PASS.
+      Reply with PASS or FAIL and one sentence why.

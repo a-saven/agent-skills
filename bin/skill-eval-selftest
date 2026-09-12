@@ -1,0 +1,140 @@
+#!/bin/sh
+# Self-test harness for bin/skill-eval. Uses stub claude — not a live skill eval.
+set -eu
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+STUB="$ROOT/bin/skill-eval-stub-claude"
+EVAL="$ROOT/bin/skill-eval"
+export CLAUDE_BIN="$STUB"
+
+fail() { echo "SELFTEST FAIL: $*" >&2; exit 1; }
+pass() { echo "SELFTEST PASS: $*"; }
+
+[ -x "$STUB" ] || fail "missing stub: $STUB"
+[ -x "$EVAL" ] || fail "missing runner: $EVAL"
+
+cleanup() {
+  git -C "$ROOT" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | while IFS= read -r w; do
+    case "$w" in *skill-eval*) git -C "$ROOT" worktree remove --force "$w" 2>/dev/null || rm -rf "$w";; esac
+  done
+  git -C "$ROOT" worktree prune 2>/dev/null || true
+  rm -rf "$ROOT/evals/orchestrate/01-dup" "$ROOT/evals/ticket/01-dup"
+  rm -rf "$ROOT/evals/orchestrate/01-timeout" "$ROOT/evals/manual-qa"
+  printf '{\n  "updated": null,\n  "cases": {}\n}\n' > "$ROOT/evals/results/baseline.json"
+}
+trap cleanup EXIT INT TERM
+
+echo "=== 1. full suite ==="
+out=$("$EVAL" 2>&1) || { echo "$out"; fail "full suite"; }
+echo "$out" | grep -q "ALL PASSED" || fail "full suite missing ALL PASSED"
+pass "full suite"
+
+echo "=== 2. worktree cleanup ==="
+wt_count=$(git -C "$ROOT" worktree list | grep -c skill-eval || true)
+[ "$wt_count" -eq 0 ] || { git -C "$ROOT" worktree list; fail "orphan worktrees ($wt_count)"; }
+pass "worktree cleanup"
+
+echo "=== 3. result JSON valid ==="
+latest=$(python3 - "$ROOT/evals/results" <<'PY'
+import glob, os, sys
+d = sys.argv[1]
+files = sorted(f for f in glob.glob(os.path.join(d, "*.json")) if not f.endswith("baseline.json"))
+print(files[-1] if files else "")
+PY
+)
+[ -n "$latest" ] || fail "no result JSON"
+python3 -m json.tool "$latest" >/dev/null || fail "invalid JSON: $latest"
+python3 - "$latest" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert "cases" in d and d["cases"], "missing cases"
+for ck, case in d["cases"].items():
+    assert "output" in case, f"{ck} missing output transcript"
+    assert case.get("output_chars", 0) > 0, f"{ck} empty output"
+PY
+pass "result JSON ($latest)"
+
+echo "=== 4. ticket single case (spec verification) ==="
+out=$("$EVAL" --skill ticket --case 01-bug-repro 2>&1) || { echo "$out"; fail "ticket case"; }
+echo "$out" | grep -q "ticket/01-bug-repro/has-repro-section.*PASS" || fail "ticket repro check"
+echo "$out" | grep -q "ALL PASSED" || fail "ticket case not all passed"
+pass "ticket/01-bug-repro"
+
+echo "=== 5. worktree path includes skill (collision fix) ==="
+mkdir -p "$ROOT/evals/orchestrate/01-dup" "$ROOT/evals/ticket/01-dup"
+printf 'Plan only.\n' > "$ROOT/evals/orchestrate/01-dup/task.md"
+printf 'Draft.\n' > "$ROOT/evals/ticket/01-dup/task.md"
+cat > "$ROOT/evals/orchestrate/01-dup/criteria.yaml" <<'EOF'
+case: orchestrate/01-dup
+checks:
+  - id: ok
+    type: mechanical
+    assert: output matches /Standard/
+EOF
+cat > "$ROOT/evals/ticket/01-dup/criteria.yaml" <<'EOF'
+case: ticket/01-dup
+checks:
+  - id: ok
+    type: mechanical
+    assert: output matches /Steps to reproduce/
+EOF
+out=$("$EVAL" --case 01-dup 2>&1) || { echo "$out"; fail "01-dup cases"; }
+echo "$out" | grep -q "skill-eval-orchestrate-01-dup" || fail "orchestrate dup path"
+echo "$out" | grep -q "skill-eval-ticket-01-dup" || fail "ticket dup path"
+echo "$out" | grep -qi "fatal:" && fail "git worktree fatal"
+rm -rf "$ROOT/evals/orchestrate/01-dup" "$ROOT/evals/ticket/01-dup"
+pass "worktree collision"
+
+echo "=== 6. concurrent result files ==="
+before=$(ls "$ROOT/evals/results"/*.json 2>/dev/null | grep -v baseline | wc -l | tr -d ' ')
+("$EVAL" --skill orchestrate --case 01-simple-feature >/dev/null 2>&1) &
+("$EVAL" --skill ticket --case 01-bug-repro >/dev/null 2>&1) &
+wait
+after=$(ls "$ROOT/evals/results"/*.json 2>/dev/null | grep -v baseline | wc -l | tr -d ' ')
+[ "$after" -ge $((before + 2)) ] || fail "expected 2 new result files (before=$before after=$after)"
+pass "concurrent result files"
+
+echo "=== 7. timeout ==="
+mkdir -p "$ROOT/evals/orchestrate/01-timeout"
+echo 'sleep-stub' > "$ROOT/evals/orchestrate/01-timeout/task.md"
+cat > "$ROOT/evals/orchestrate/01-timeout/criteria.yaml" <<'EOF'
+case: orchestrate/01-timeout
+checks:
+  - id: t
+    type: mechanical
+    assert: output contains "Standard"
+EOF
+out=$(SKILL_EVAL_TIMEOUT=2 "$EVAL" --skill orchestrate --case 01-timeout 2>&1) || true
+echo "$out" | grep -q "TIMEOUT after 2s" || { echo "$out"; fail "timeout label"; }
+rm -rf "$ROOT/evals/orchestrate/01-timeout"
+pass "timeout"
+
+echo "=== 8. baseline refuse-on-fail ==="
+if "$EVAL" --update-baseline >/dev/null 2>&1; then
+  fail "--update-baseline should refuse failing timeout run"
+fi
+pass "baseline refuse-on-fail"
+
+echo "=== 9. baseline merge + no false regression ==="
+out=$("$EVAL" 2>&1) || { echo "$out"; fail "pre-baseline run"; }
+"$EVAL" --update-baseline >/dev/null || fail "update-baseline on passing run"
+out2=$("$EVAL" 2>&1) || { echo "$out2"; fail "post-baseline run"; }
+echo "$out2" | grep -q "REGRESSION" && fail "false regression after baseline update"
+echo "$out2" | grep -q "ALL PASSED" || fail "post-baseline not all passed"
+pass "baseline merge + re-run"
+
+echo "=== 10. filter ignores invalid agent eval folder ==="
+mkdir -p "$ROOT/evals/manual-qa/01-x"
+echo x > "$ROOT/evals/manual-qa/01-x/task.md"
+cat > "$ROOT/evals/manual-qa/01-x/criteria.yaml" <<'EOF'
+case: manual-qa/01-x
+checks:
+  - id: x
+    type: mechanical
+    assert: output contains "x"
+EOF
+out=$("$EVAL" --skill orchestrate --case 01-simple-feature 2>&1) || { echo "$out"; fail "filtered run with agent folder present"; }
+pass "filter before agent guard"
+
+echo ""
+echo "ALL SELFTESTS PASSED"
