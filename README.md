@@ -14,6 +14,7 @@ Skills follow the [Agent Skills](https://github.com/anthropics/skills) format (`
 | [`playwright-qa`](skills/playwright-qa/SKILL.md) | skill | The browser-driving playbook `manual-qa` follows (navigate → snapshot → act → assert, forced error states, mobile viewports). |
 | [`graphify`](skills/graphify/SKILL.md) | skill | Any folder of code/docs/papers/media → persistent knowledge graph with community detection, god nodes, and `query` / `path` / `explain` tools. Wraps the [graphify](https://github.com/sponsors/safishamsi) Python package. |
 | [`worktree-graphs`](skills/worktree-graphs/SKILL.md) | skill + [`bin/graphs`](bin/graphs) CLI | Keeps a **CodeGraph index + graphify graph alive in every git worktree** — reflink-clones main's index into fresh worktrees (3 copies of a 251 MB db = 8 KB) and syncs the branch delta, so sessions there never silently fall back to grep. `graphs status` shows one row per worktree. CodeGraph and graphify are complementary: CodeGraph is the branch-accurate "where is X / who calls X" index; graphify is the architectural overview. |
+| [`skill-eval`](skills/skill-eval/SKILL.md) | skill + [`bin/skill-eval`](bin/skill-eval) CLI | Regression-tests skills against fixture tasks in `evals/`, scoring mechanical + optionally LLM-judged criteria, and flags drift against a committed baseline. |
 | [`agents/`](agents/) | subagents | The crew `orchestrate` delegates to: `architect`, `backend-engineer`, `frontend-engineer`, `automation-qa`, `backend-reviewer`, `frontend-reviewer`, `security-reviewer`, and `manual-qa` (drives a real browser or the iOS Simulator; reports PASS/FAIL with evidence). Engineers write code but not tests, the test author writes tests but not code, reviewers only report — that separation is what makes the chain safe to automate. |
 
 ## Install
@@ -52,9 +53,26 @@ flowchart TD
   QA -->|failures become tickets| TIX
 ```
 
+## Evals
+
+Regression fixtures live in [`evals/`](evals/). Each case is a folder with `task.md` (the prompt) and `criteria.yaml` (binary checks). Run everything with `bin/skill-eval`; filter with `--skill` / `--case`. Mechanical checks run locally; criteria marked `type: judged` use a cheap LLM call and are labeled as such in the report.
+
+```bash
+bin/skill-eval                                    # all cases
+bin/skill-eval --skill orchestrate --case 01-simple-feature
+bin/skill-eval --update-baseline                # promote a good run → evals/results/baseline.json (committed)
+```
+
+Timestamped runs land in `evals/results/<ISO-timestamp>-<pid>.json` (gitignored scratch) and include a truncated transcript. **`evals/results/baseline.json` is committed** — `--update-baseline` merges by case-id and refuses a failing run. CI: `bin/skill-eval` (exit 1 on check failure/regression; exit 2 on infra). Skills only — agent evals require the Task tool and are not supported in v1. Invocations time out after `SKILL_EVAL_TIMEOUT` (default 300s; judged checks default 60s). The skill under test is copied from the working tree and loaded via `CLAUDE_CONFIG_DIR` so `~/.claude/skills` cannot shadow it.
+
+**Add a case:** create `evals/<skill>/<case-id>/task.md` + `criteria.yaml`, run the case, then `--update-baseline` if the output is correct.
+
+**Self-test (stub claude, no API):** `bin/skill-eval-selftest` — exercises worktree isolation, timeouts, baseline merge/refuse, and all three shipped cases.
+
 ## Requirements
 
 - [Claude Code](https://claude.com/claude-code) and `git` for the full install; skills alone need only an agent that reads `SKILL.md`.
+- `skill-eval`: `claude` CLI on PATH with headless (`-p`) mode; `python3` for YAML/JSON parsing and invocation timeouts in [`bin/skill-eval`](bin/skill-eval) (no `yq` dependency).
 - `qa-run` / `manual-qa`: Node.js for the Playwright MCP (`claude mcp add -s user playwright -- npx @playwright/mcp@latest --headless`); Xcode + Simulator for native iOS runs.
 - `graphify`: Python 3.10+ (`uv tool install graphifyy` or `pip install graphifyy`).
 - `worktree-graphs`: the CodeGraph CLI (`npm i -g @colbymchenry/codegraph`, then `codegraph init` once per repo; `codegraph install -y` wires its MCP into Claude Code). The installer also adds a SessionStart hook that runs `graphs ensure` so fresh worktrees seed themselves.
@@ -85,8 +103,8 @@ Browse more: [agentskills.io](https://agentskills.io) (the spec + client list), 
 ## Uninstall
 
 ```bash
-for s in orchestrate ticket qa-run playwright-qa graphify worktree-graphs; do rm -f ~/.claude/skills/$s; done
-rm -f ~/.claude/bin/graphs ~/.local/bin/graphs   # plus the SessionStart "graphs ensure" hook in ~/.claude/settings.json
+for s in orchestrate ticket qa-run playwright-qa graphify worktree-graphs skill-eval; do rm -f ~/.claude/skills/$s; done
+rm -f ~/.claude/bin/graphs ~/.local/bin/graphs ~/.claude/bin/skill-eval ~/.local/bin/skill-eval   # plus the SessionStart "graphs ensure" hook in ~/.claude/settings.json
 for a in architect backend-engineer frontend-engineer automation-qa backend-reviewer frontend-reviewer security-reviewer manual-qa; do rm -f ~/.claude/agents/$a.md; done
 rm -rf ~/.agent-skills
 ```

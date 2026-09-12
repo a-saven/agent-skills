@@ -1,0 +1,14 @@
+case: ticket/01-bug-repro
+checks:
+  - id: has-repro-section
+    description: Draft must include a Steps to reproduce heading plus a numbered first step
+    type: mechanical
+    assert: output matches /\*\*Steps to reproduce\*\*[\s\S]*\n1\./
+  - id: has-where-reference
+    description: Draft must have a Where heading that names src/auth (not just echo the notes)
+    type: mechanical
+    assert: output matches /\*\*Where\*\*[\s\S]{0,400}src\/auth/
+  - id: no-ai-filler
+    description: Must not contain generic AI slop phrases from the ticket skill ban list
+    type: mechanical
+    assert: output does not contain any of ["comprehensive", "robust", "seamless", "leverage", "utilize", "As an AI"]

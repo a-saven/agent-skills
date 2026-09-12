@@ -1,0 +1,56 @@
+#!/bin/sh
+# Stub claude for bin/skill-eval-selftest — not used in production evals.
+set -eu
+prompt=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -p) prompt=$2; shift 2;;
+    --model|--output-format) shift 2;;
+    *) shift;;
+  esac
+done
+if echo "$prompt" | grep -q 'sleep-stub'; then
+  sleep 600
+  echo "should not reach"
+  exit 0
+fi
+if echo "$prompt" | grep -q '/ticket'; then
+  cat <<'EOF'
+**What's happening**
+Login on staging hangs after valid credentials.
+
+**Where**
+`src/auth/` middleware from yesterday's merge.
+
+**Steps to reproduce**
+1. Open staging in Chrome.
+2. Submit valid creds.
+- Expected: dashboard loads.
+- Actual: spinner forever.
+EOF
+elif echo "$prompt" | grep -qi 'add auth'; then
+  cat <<'EOF'
+Phase 0 — blocking questions (one message):
+
+1. Which auth provider?
+2. Which surfaces (Hono/Elysia/Expo)?
+3. Session cookie or JWT?
+4. Existing user store?
+5. Required v1 flows?
+EOF
+elif echo "$prompt" | grep -q '/orchestrate'; then
+  cat <<'EOF'
+Classification: Standard
+
+| Node | Tier | Acceptance criteria |
+|---|---|---|
+| add-flag | Haiku | `grep -q '\-\-dry-run' bin/graphs` exits 0 |
+| wire-status | Sonnet | `bin/graphs status --dry-run` exits 0 |
+
+Independent nodes run in parallel — no false dependency edges.
+EOF
+elif echo "$prompt" | grep -qi 'dependency\|PASS or FAIL\|max 5'; then
+  echo "PASS — no false sequential edges; questions batched appropriately."
+else
+  echo "PASS stub"
+fi

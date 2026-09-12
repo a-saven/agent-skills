@@ -1,0 +1,558 @@
+#!/bin/sh
+# skill-eval — regression-test skills against fixture tasks in evals/
+set -eu
+
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+EVALS_DIR="$REPO_ROOT/evals"
+RESULTS_DIR="$EVALS_DIR/results"
+BASELINE="$RESULTS_DIR/baseline.json"
+
+CLAUDE=${CLAUDE_BIN:-$(command -v claude 2>/dev/null || true)}
+if [ -n "$CLAUDE" ] && [ "${CLAUDE#/}" = "$CLAUDE" ]; then
+  CLAUDE=$(cd "$(dirname "$CLAUDE")" && pwd)/$(basename "$CLAUDE")
+fi
+JUDGE_MODEL=${SKILL_EVAL_JUDGE_MODEL:-haiku}
+SKILL_EVAL_TIMEOUT=${SKILL_EVAL_TIMEOUT:-300}
+SKILL_EVAL_JUDGE_TIMEOUT=${SKILL_EVAL_JUDGE_TIMEOUT:-60}
+# Keep judge prompts under ARG_MAX; mechanical scoring never uses argv for transcripts.
+JUDGE_MAX_CHARS=${SKILL_EVAL_JUDGE_MAX_CHARS:-80000}
+TRANSCRIPT_MAX_CHARS=${SKILL_EVAL_TRANSCRIPT_MAX_CHARS:-50000}
+
+SKILL_FILTER=""
+CASE_FILTER=""
+UPDATE_BASELINE=no
+RUN_TS=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+RUN_JSON="$RESULTS_DIR/$RUN_TS-$$.json"
+TMPDIR=${TMPDIR:-/tmp}
+RUN_DIR="$TMPDIR/skill-eval-$$"
+mkdir -p "$RUN_DIR"
+AGG="$RUN_DIR/agg.json"
+CASE_LIST="$RUN_DIR/cases.txt"
+WORKTREE_REGISTRY="$RUN_DIR/worktrees.txt"
+INFRA_FLAG="$RUN_DIR/infra"
+SEQ=0
+: > "$WORKTREE_REGISTRY"
+: > "$INFRA_FLAG"
+
+usage() {
+  cat <<'EOF'
+usage: skill-eval [--skill NAME] [--case ID] [--update-baseline]
+
+  (no args)              run all eval cases
+  --skill NAME           run only evals/NAME/*/
+  --case ID              run only that case-id (optionally with --skill)
+  --update-baseline      merge the latest passing run into evals/results/baseline.json
+                         (refuses if the run has any fail; merges by case-id, does not
+                         drop cases absent from this run). Baseline is committed;
+                         timestamped runs are gitignored scratch.
+
+Requires: claude (headless -p), git, python3
+
+Env: SKILL_EVAL_TIMEOUT (default 300s), SKILL_EVAL_JUDGE_TIMEOUT (default 60s)
+Exit: 0 all pass; 1 check failure or regression; 2 runner/infra error
+EOF
+  exit 2
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --skill) SKILL_FILTER=${2:?}; shift 2;;
+    --case)  CASE_FILTER=${2:?}; shift 2;;
+    --update-baseline) UPDATE_BASELINE=yes; shift;;
+    -h|--help) usage;;
+    *) echo "unknown option: $1" >&2; usage;;
+  esac
+done
+
+mark_infra() { echo 1 > "$INFRA_FLAG"; }
+
+require_claude() {
+  [ -n "$CLAUDE" ] && [ -x "$CLAUDE" ] || {
+    echo "error: claude CLI not found on PATH (need headless -p mode)" >&2
+    exit 2
+  }
+}
+
+cleanup_worktree() {
+  wt=$1; br=$2
+  [ -n "$wt" ] || return 0
+  git -C "$REPO_ROOT" worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"
+  git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
+  [ -n "$br" ] && git -C "$REPO_ROOT" branch -D "$br" 2>/dev/null || true
+}
+
+on_exit() {
+  if [ -f "$WORKTREE_REGISTRY" ]; then
+    while IFS='|' read -r wt br; do
+      [ -n "$wt" ] || continue
+      cleanup_worktree "$wt" "$br"
+    done < "$WORKTREE_REGISTRY"
+  fi
+  rm -rf "$RUN_DIR"
+}
+trap on_exit EXIT INT TERM
+
+next_tmp() {
+  SEQ=$((SEQ + 1))
+  echo "$RUN_DIR/t$SEQ"
+}
+
+# --- python helpers: transcripts always via files or stdin, never argv ---
+
+py_parse_criteria() {
+  python3 - "$1" <<'PY'
+import sys, re, json
+
+text = open(sys.argv[1]).read()
+case_m = re.search(r"^case:\s*(.+)$", text, re.M)
+case = case_m.group(1).strip() if case_m else ""
+
+checks = []
+for block in re.split(r"\n\s*-\s+id:\s*", text)[1:]:
+    m_id = re.match(r"(\S+)", block)
+    if not m_id:
+        continue
+    cid = m_id.group(1)
+    desc_m = re.search(r"description:\s*(.+)$", block, re.M)
+    type_m = re.search(r"type:\s*(\S+)", block, re.M)
+    assert_m = re.search(r"assert:\s*(.+)$", block, re.M)
+    jp_m = re.search(r"judge_prompt:\s*[>|]\s*\n((?:\s+.+\n?)+)", block)
+    if not jp_m:
+        jp_m = re.search(r"judge_prompt:\s*(.+)$", block, re.M)
+        judge = jp_m.group(1).strip() if jp_m else ""
+    else:
+        judge = re.sub(r"^\s+", "", jp_m.group(1), flags=re.M).strip()
+    checks.append({
+        "id": cid,
+        "description": desc_m.group(1).strip() if desc_m else "",
+        "type": type_m.group(1).strip() if type_m else "mechanical",
+        "assert": assert_m.group(1).strip() if assert_m else "",
+        "judge_prompt": judge,
+    })
+
+print(json.dumps({"case": case, "checks": checks}))
+PY
+}
+
+py_mechanical_check() {
+  # argv: expr, worktree, transcript-file
+  python3 - "$1" "$2" "$3" <<'PY'
+import sys, re, json, os, subprocess
+expr, wt, src = sys.argv[1], sys.argv[2], sys.argv[3]
+output = open(src).read() if src else ""
+
+def emit(ok, detail):
+    print(json.dumps({"pass": bool(ok), "detail": detail}))
+
+if expr.startswith('output contains "'):
+    needle = expr[len('output contains "'):-1]
+    emit(needle in output, f'contains "{needle}"' if needle in output else f'missing "{needle}"')
+elif expr.startswith('output does not contain "'):
+    needle = expr[len('output does not contain "'):-1]
+    emit(needle not in output, f'absent "{needle}"' if needle not in output else f'found forbidden "{needle}"')
+elif expr.startswith("output does not contain any of "):
+    m = re.match(r"output does not contain any of \[(.*)\]", expr)
+    if not m:
+        emit(False, f"unparseable assert: {expr}")
+    else:
+        items = re.findall(r'"([^"]*)"', m.group(1))
+        found = [x for x in items if x in output]
+        emit(not found, "none found" if not found else f'found: {", ".join(found)}')
+elif expr.startswith("output matches /") and expr.endswith("/"):
+    pat = expr[len("output matches /"):-1]
+    ok = re.search(pat, output, re.M | re.S) is not None
+    emit(ok, f"regex /{pat}/ {'matched' if ok else 'no match'}")
+elif expr.startswith("file exists "):
+    rel = expr[len("file exists "):].strip()
+    path = os.path.join(wt, rel)
+    emit(os.path.isfile(path), f"exists {rel}" if os.path.isfile(path) else f"missing {rel}")
+elif expr.startswith('file contains "') and " in " in expr:
+    m = re.match(r'file contains "([^"]*)" in (.+)$', expr)
+    if not m:
+        emit(False, f"unparseable assert: {expr}")
+    else:
+        needle, rel = m.group(1), m.group(2).strip()
+        path = os.path.join(wt, rel)
+        if not os.path.isfile(path):
+            emit(False, f"missing {rel}")
+        else:
+            text = open(path).read()
+            emit(needle in text, f'{rel} contains "{needle}"' if needle in text else f'{rel} missing "{needle}"')
+elif expr.startswith("cmd exits 0:"):
+    cmd = expr[len("cmd exits 0:"):].strip()
+    p = subprocess.run(cmd, shell=True, cwd=wt or None, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    emit(p.returncode == 0, f"exit {p.returncode}" + (f": {(p.stdout or '')[:80]}" if p.returncode else ""))
+else:
+    emit(False, f"unknown assert expression: {expr}")
+PY
+}
+
+py_parse_judge() {
+  python3 - "$1" <<'PY'
+import json, sys
+resp = open(sys.argv[1]).read().strip()
+first = resp.split()[0].upper() if resp.split() else ""
+print(json.dumps({"pass": first == "PASS", "detail": resp[:300]}))
+PY
+}
+
+py_record_check() {
+  python3 - "$AGG" "$1" "$2" "$3" "$4" "$5" <<'PY'
+import json, sys
+agg, case_key, cid, status, typ, dfile = sys.argv[1:7]
+detail = open(dfile).read() if dfile else ""
+data = json.load(open(agg))
+data["cases"].setdefault(case_key, {"checks": {}})["checks"][cid] = {
+    "status": status, "type": typ, "detail": detail
+}
+json.dump(data, open(agg, "w"))
+PY
+}
+
+py_record_output() {
+  python3 - "$AGG" "$1" "$2" "$3" <<'PY'
+import json, sys
+agg, case_key, path, limit = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+text = open(path).read() if path else ""
+data = json.load(open(agg))
+case = data["cases"].setdefault(case_key, {"checks": {}})
+case["output"] = text[:limit]
+case["output_chars"] = len(text)
+json.dump(data, open(agg, "w"))
+PY
+}
+
+py_baseline_status() {
+  python3 - "$BASELINE" "$1" "$2" <<'PY'
+import json, sys, os
+path, case_key, cid = sys.argv[1:4]
+if not os.path.exists(path):
+    sys.exit(0)
+b = json.load(open(path))
+print(b.get("cases", {}).get(case_key, {}).get("checks", {}).get(cid, ""))
+PY
+}
+
+py_fail_and_regression_counts() {
+  python3 - "$1" "$2" <<'PY'
+import json, sys, os
+agg, baseline = sys.argv[1], sys.argv[2]
+run = json.load(open(agg))
+fails = sum(1 for c in run["cases"].values() for r in c.get("checks", {}).values() if r["status"] != "pass")
+regs = 0
+if os.path.exists(baseline):
+    base = json.load(open(baseline))
+    for case_id, case in run["cases"].items():
+        bchecks = base.get("cases", {}).get(case_id, {}).get("checks", {})
+        for cid, r in case.get("checks", {}).items():
+            if bchecks.get(cid) == "pass" and r["status"] == "fail":
+                regs += 1
+print(f"{fails} {regs}")
+PY
+}
+
+py_latest_run() {
+  python3 - "$1" <<'PY'
+import os, sys, glob
+d = sys.argv[1]
+files = sorted(f for f in glob.glob(os.path.join(d, "*.json")) if not f.endswith("baseline.json"))
+print(files[-1] if files else "")
+PY
+}
+
+py_update_baseline() {
+  python3 - "$1" "$2" <<'PY'
+import json, sys, os
+from datetime import datetime, timezone
+run_path, baseline_path = sys.argv[1], sys.argv[2]
+run = json.load(open(run_path))
+failed = []
+for case_id, case in run.get("cases", {}).items():
+    for cid, r in case.get("checks", {}).items():
+        if r.get("status") != "pass":
+            failed.append(f"{case_id}/{cid}")
+if failed:
+    print("error: refusing to promote a failing run:", ", ".join(failed), file=sys.stderr)
+    sys.exit(1)
+existing = {"cases": {}}
+if os.path.exists(baseline_path):
+    existing = json.load(open(baseline_path))
+    existing.setdefault("cases", {})
+existing["updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+for case_id, case in run.get("cases", {}).items():
+    existing["cases"][case_id] = {
+        "checks": {cid: r.get("status", "fail") for cid, r in case.get("checks", {}).items()}
+    }
+os.makedirs(os.path.dirname(baseline_path), exist_ok=True)
+with open(baseline_path, "w") as f:
+    json.dump(existing, f, indent=2)
+    f.write("\n")
+PY
+}
+
+discover_cases() {
+  : > "$CASE_LIST"
+  DISCOVER_ERR="$RUN_DIR/discover.err"
+  : > "$DISCOVER_ERR"
+  find "$EVALS_DIR" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | sort | while IFS= read -r cdir; do
+    skill=$(basename "$(dirname "$cdir")")
+    case=$(basename "$cdir")
+    [ "$skill" = "results" ] && continue
+    [ -f "$cdir/task.md" ] && [ -f "$cdir/criteria.yaml" ] || continue
+    [ -n "$SKILL_FILTER" ] && [ "$skill" != "$SKILL_FILTER" ] && continue
+    [ -n "$CASE_FILTER" ] && [ "$case" != "$CASE_FILTER" ] && continue
+    if [ ! -f "$REPO_ROOT/skills/$skill/SKILL.md" ]; then
+      echo "error: evals/$skill/ has no matching skills/$skill/SKILL.md (agent evals not supported in v1)" >> "$DISCOVER_ERR"
+      continue
+    fi
+    echo "$skill|$case|$cdir" >> "$CASE_LIST"
+  done
+  if [ -s "$DISCOVER_ERR" ]; then
+    cat "$DISCOVER_ERR" >&2
+    exit 2
+  fi
+}
+
+setup_worktree() {
+  skill=$1; case_id=$2
+  n=$$
+  wt=$(cd "$REPO_ROOT/.." && pwd)/skill-eval-${skill}-${case_id}-${n}
+  branch="skill-eval/${skill}/${case_id}-${n}"
+  git -C "$REPO_ROOT" worktree add "$wt" -b "$branch" HEAD >&2 || return 1
+  echo "$wt|$branch" >> "$WORKTREE_REGISTRY"
+  # Score the working-tree skill, not HEAD — copy uncommitted SUT into the worktree.
+  if [ -d "$REPO_ROOT/skills/$skill" ]; then
+    rm -rf "$wt/skills/$skill"
+    cp -R "$REPO_ROOT/skills/$skill" "$wt/skills/$skill"
+  fi
+  # Isolate Claude config so ~/.claude/skills cannot shadow the SUT.
+  cfg="$wt/.skill-eval-claude"
+  mkdir -p "$cfg/skills"
+  ln -sfn "$wt/skills/$skill" "$cfg/skills/$skill"
+  echo "$wt"
+}
+
+run_with_timeout() {
+  limit=$1; out=$2; shift 2
+  set +e
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$limit" "$@" > "$out" 2>&1
+    rc=$?
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$limit" "$@" > "$out" 2>&1
+    rc=$?
+  else
+    python3 - "$limit" "$out" "$@" <<'PY'
+import subprocess, sys
+limit, outpath = int(sys.argv[1]), sys.argv[2]
+cmd = sys.argv[3:]
+try:
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=limit, text=True)
+    open(outpath, "w").write(p.stdout or "")
+    sys.exit(p.returncode)
+except subprocess.TimeoutExpired as e:
+    open(outpath, "w").write(e.stdout or "")
+    sys.exit(124)
+PY
+    rc=$?
+  fi
+  return "$rc"
+}
+
+invoke_skill() {
+  wt=$1; skill=$2; task_file=$3; out=$4
+  promptf=$(next_tmp).prompt
+  {
+    printf '/%s\n\n' "$skill"
+    cat "$task_file"
+  } > "$promptf"
+  cfg="$wt/.skill-eval-claude"
+  set +e
+  run_with_timeout "$SKILL_EVAL_TIMEOUT" "$out" \
+    env CLAUDE_CONFIG_DIR="$cfg" CLAUDE_PROJECT_DIR="$wt" \
+    sh -c 'cd "$1" && exec "$2" -p "$(cat "$3")" --output-format text' _ "$wt" "$CLAUDE" "$promptf"
+  rc=$?
+  return "$rc"
+}
+
+invoke_judge() {
+  prompt=$1; output_file=$2; out=$3
+  judge_in=$(next_tmp).judge
+  python3 - "$judge_in" "$prompt" "$output_file" "$JUDGE_MAX_CHARS" <<'PY'
+import sys
+dest, prompt, src, limit = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+body = open(src).read() if src else ""
+if len(body) > limit:
+    body = body[:limit] + "\n[truncated for judge]\n"
+open(dest, "w").write(prompt + "\n\n---\nOUTPUT:\n" + body)
+PY
+  set +e
+  run_with_timeout "$SKILL_EVAL_JUDGE_TIMEOUT" "$out" \
+    sh -c 'exec "$1" -p "$(cat "$2")" --model "$3" --output-format text' _ "$CLAUDE" "$judge_in" "$JUDGE_MODEL"
+  rc=$?
+  return "$rc"
+}
+
+emit_row() {
+  case_key=$1; cid=$2; passed=$3; type_label=$4; detail=$5
+  status_lower=$(printf '%s' "$passed" | tr '[:upper:]' '[:lower:]')
+  store_type=$6
+  limit=$7
+  [ -n "$limit" ] || limit=55
+  reg=""
+  was_pass=$(py_baseline_status "$case_key" "$cid")
+  if [ "$was_pass" = "pass" ] && [ "$status_lower" = "fail" ]; then
+    reg=" **REGRESSION**"
+  fi
+  short=$(printf '%s' "$detail" | python3 -c "import sys; print(sys.stdin.read()[:${limit}])")
+  printf '%-36s %-8s %-12s %s%s\n' "${case_key}/${cid}" "$passed" "$type_label" "$short" "$reg"
+  dfile=$(next_tmp).detail
+  printf '%s' "$detail" > "$dfile"
+  py_record_check "$case_key" "$cid" "$status_lower" "$store_type" "$dfile"
+}
+
+score_timeout() {
+  emit_row "$1" "$2" "FAIL" "$3" "TIMEOUT after ${4}s" "$5" 80
+}
+
+cmd_update_baseline() {
+  latest=$(py_latest_run "$RESULTS_DIR")
+  [ -n "$latest" ] || { echo "error: no timestamped run in $RESULTS_DIR" >&2; exit 2; }
+  py_update_baseline "$latest" "$BASELINE"
+  echo "baseline merged from $(basename "$latest") → evals/results/baseline.json"
+}
+
+cmd_run() {
+  require_claude
+  discover_cases
+  [ -s "$CASE_LIST" ] || { echo "no matching eval cases" >&2; exit 2; }
+
+  printf '{"timestamp":"%s","cases":{}}' "$RUN_TS" > "$AGG"
+
+  echo ""
+  printf '%-36s %-8s %-12s %s\n' "CASE/CHECK" "RESULT" "TYPE" "DETAIL"
+  printf '%-36s %-8s %-12s %s\n' "------------------------------------" "--------" "------------" "------"
+
+  while IFS='|' read -r skill case_id cdir; do
+    [ -n "$skill" ] || continue
+    case_key="${skill}/${case_id}"
+    criteria_json=$(py_parse_criteria "$cdir/criteria.yaml")
+    outf=$(next_tmp).out
+
+    if ! wt=$(setup_worktree "$skill" "$case_id"); then
+      mark_infra
+      emit_row "$case_key" "worktree-setup" "FAIL" "setup" "worktree setup error" "setup" 80
+      echo "" >&2
+      continue
+    fi
+
+    [ -d "$cdir/fixture" ] && cp -R "$cdir/fixture/." "$wt/"
+    echo "→ running $case_key (worktree: $wt)" >&2
+
+    set +e
+    invoke_skill "$wt" "$skill" "$cdir/task.md" "$outf"
+    invoke_rc=$?
+    set -e
+    py_record_output "$case_key" "$outf" "$TRANSCRIPT_MAX_CHARS"
+
+    invoke_timed_out=no
+    invoke_failed=no
+    if [ "$invoke_rc" -eq 124 ]; then
+      invoke_timed_out=yes
+    elif [ "$invoke_rc" -ne 0 ]; then
+      invoke_failed=yes
+      mark_infra
+    fi
+
+    check_count=$(printf '%s' "$criteria_json" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['checks']))")
+    i=0
+    while [ "$i" -lt "$check_count" ]; do
+      check_line=$(printf '%s' "$criteria_json" | python3 -c "
+import json, sys
+c = json.load(sys.stdin)['checks'][int(sys.argv[1])]
+print(json.dumps(c))
+" "$i")
+      cid=$(printf '%s' "$check_line" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
+      ctype=$(printf '%s' "$check_line" | python3 -c "import json,sys; print(json.load(sys.stdin)['type'])")
+      assert_expr=$(printf '%s' "$check_line" | python3 -c "import json,sys; print(json.load(sys.stdin).get('assert',''))")
+      judge_prompt=$(printf '%s' "$check_line" | python3 -c "import json,sys; print(json.load(sys.stdin).get('judge_prompt',''))")
+
+      if [ "$invoke_timed_out" = yes ]; then
+        score_timeout "$case_key" "$cid" "invoke" "$SKILL_EVAL_TIMEOUT" "invoke"
+        i=$((i + 1))
+        continue
+      fi
+      if [ "$invoke_failed" = yes ]; then
+        emit_row "$case_key" "$cid" "FAIL" "invoke" "invoke failed (exit $invoke_rc)" "invoke" 80
+        i=$((i + 1))
+        continue
+      fi
+
+      if [ "$ctype" = "judged" ]; then
+        jout=$(next_tmp).jout
+        set +e
+        invoke_judge "$judge_prompt" "$outf" "$jout"
+        judge_rc=$?
+        set -e
+        if [ "$judge_rc" -eq 124 ]; then
+          score_timeout "$case_key" "$cid" "LLM-judged, not mechanical" "$SKILL_EVAL_JUDGE_TIMEOUT" "judged"
+          i=$((i + 1))
+          continue
+        fi
+        check_result=$(py_parse_judge "$jout")
+        type_label="LLM-judged, not mechanical"
+        store_type="judged"
+      else
+        check_result=$(py_mechanical_check "$assert_expr" "$wt" "$outf")
+        type_label="mechanical"
+        store_type="mechanical"
+      fi
+
+      passed=$(printf '%s' "$check_result" | python3 -c "import json,sys; print('PASS' if json.load(sys.stdin)['pass'] else 'FAIL')")
+      full_detail=$(printf '%s' "$check_result" | python3 -c "import json,sys; print(json.load(sys.stdin)['detail'])")
+      emit_row "$case_key" "$cid" "$passed" "$type_label" "$full_detail" "$store_type" 55
+      i=$((i + 1))
+    done
+    echo "" >&2
+  done < "$CASE_LIST"
+
+  python3 - "$AGG" "$RUN_JSON" <<'PY'
+import json, sys, os
+src, dest = sys.argv[1], sys.argv[2]
+os.makedirs(os.path.dirname(dest), exist_ok=True)
+data = json.load(open(src))
+json.dump(data, open(dest, "w"), indent=2)
+open(dest, "a").write("\n")
+PY
+  echo ""
+  echo "results → evals/results/$(basename "$RUN_JSON")"
+
+  set -- $(py_fail_and_regression_counts "$AGG" "$BASELINE")
+  fail_count=$1
+  reg_count=$2
+
+  if [ "$reg_count" -gt 0 ]; then
+    echo ""
+    echo "REGRESSIONS (baseline pass → fail): see table above"
+  fi
+
+  if [ -s "$INFRA_FLAG" ] && [ "$(cat "$INFRA_FLAG")" = 1 ]; then
+    echo ""
+    echo "FAILED (infra): $fail_count check(s), $reg_count regression(s)"
+    exit 2
+  fi
+  if [ "$fail_count" -gt 0 ] || [ "$reg_count" -gt 0 ]; then
+    echo ""
+    echo "FAILED: $fail_count check(s), $reg_count regression(s)"
+    exit 1
+  fi
+  echo ""
+  echo "ALL PASSED"
+}
+
+if [ "$UPDATE_BASELINE" = yes ]; then
+  cmd_update_baseline
+  exit 0
+fi
+
+cmd_run
