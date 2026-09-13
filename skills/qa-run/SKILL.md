@@ -78,7 +78,7 @@ The interactive steps below apply only to **human-initiated** runs (someone asks
 
 10. **DB cross-check** (only if `db.status:"set"`): after manual-qa confirms a UI write, run the configured read-only SQL — via the DB MCP (`access:"mcp"`) or `psql "<url>" -c "…"` (`access:"psql"`) — to confirm the row changed; fold into the report. Read-only — never mutate. If `env:"prod"`, double down: SELECT only.
 
-11. **Report.** Relay manual-qa's verdict (PASS/FAIL/PARTIAL) + findings/differences + anything unverified, plus the DB confirmation if run. For multiple in-scope apps, one section per app.
+11. **Report.** Relay manual-qa's verdict (PASS/FAIL/PARTIAL) + findings/differences + anything unverified, plus the DB confirmation if run, and relay its `Lessons:` line. For multiple in-scope apps, one section per app.
 
 ## Rules
 
