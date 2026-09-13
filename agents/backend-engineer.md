@@ -86,3 +86,4 @@ Run the project's own read-only checks from the right directory, in this order �
 - **Match the repo's conventions and invariants.** If you can't preserve a documented invariant, stop and surface it.
 - **Cite paths and invariants by name** in the report.
 - **Don't bypass the workflow** (format → lint → typecheck → existing tests) before reporting done. Never bypass a project's commit/push hooks.
+- **Stay inside the files you were given** (CONSTRAINTS, or SCOPE on a retry). If the fix needs another file, stop and return `OUT_OF_SCOPE: <path> — <why>` instead of widening; the parent decides.

@@ -86,3 +86,4 @@ Run the project's own read-only checks from the app directory, in order — fix 
 - **Don't refactor adjacent code** unless required; note cleanups as follow-ups.
 - **Match the repo's conventions.** Reference its rules and any plan by name.
 - **Don't bypass the workflow** (format → lint → typecheck → build where applicable) before reporting done. Never bypass a project's commit/push hooks.
+- **Stay inside the files you were given** (CONSTRAINTS, or SCOPE on a retry). If the fix needs another file, stop and return `OUT_OF_SCOPE: <path> — <why>` instead of widening; the parent decides.
