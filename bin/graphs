@@ -134,9 +134,18 @@ cmd_ensure() {
     # Only a session in main refreshes main's graph; a worktree must not rebuild it.
     graphify_refresh_main "$main"
   fi
-  [ -d "$wt/.codegraph" ] && [ -n "$CODEGRAPH" ] && \
-    ( cd "$wt" && nohup nice -n 10 "$CODEGRAPH" sync >/dev/null 2>&1 & ) >/dev/null 2>&1
+  codegraph_sync_bg "$wt"
   exit 0
+}
+
+codegraph_sync_bg() {
+  wt=$1
+  [ -d "$wt/.codegraph" ] && [ -n "$CODEGRAPH" ] || return 0
+  lock="$wt/.codegraph/.sync.lock"
+  find "$lock" -maxdepth 0 -mmin +60 -exec rmdir {} \; 2>/dev/null
+  # Two sessions opening the same worktree would otherwise run two syncs into one SQLite file.
+  mkdir "$lock" 2>/dev/null || return 0
+  ( cd "$wt" && nohup nice -n 10 sh -c '"$0" sync; rmdir .codegraph/.sync.lock 2>/dev/null' "$CODEGRAPH" >/dev/null 2>&1 & ) >/dev/null 2>&1
 }
 
 cmd_status() {
