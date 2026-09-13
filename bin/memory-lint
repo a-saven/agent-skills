@@ -1,5 +1,5 @@
 #!/bin/sh
-# memory-lint — check agent MEMORY.md files against the lesson-line contract (templates/agent-memory/MEMORY.md.example).
+# memory-lint — check agent MEMORY.md index files, and the topic files beside them, against the pointer-line contract (templates/agent-memory/MEMORY.md.example).
 set -eu
 
 usage() { echo "usage: memory-lint [--prune] [<dir-or-file>...]   (default: <git root>/.claude)" >&2; exit 2; }
@@ -17,7 +17,7 @@ for a in "$@"; do
 done
 [ -n "$files" ] || { echo "memory-lint: nothing to lint"; exit 0; }
 
-lesson_count() { grep -c -E '^(- |RETRACTED )[0-9]{4}-[0-9]{2}-[0-9]{2} ' "$1" || true; }
+lesson_count() { grep -c -E '^(- .*[0-9]{4}-[0-9]{2}-[0-9]{2}|RETRACTED [0-9]{4}-[0-9]{2}-[0-9]{2} )' "$1" || true; }
 
 prune_file() {
   [ "$(lesson_count "$1")" -gt 60 ] || return 0
@@ -29,20 +29,34 @@ prune_file() {
   echo "$1: pruned $((before - $(wc -l < "$1"))) retracted line(s) older than $cutoff"
 }
 
-lint_file() {
-  awk -v f="$1" -v bytes="$(wc -c < "$1")" '
+# A secret in a topic file leaks exactly as hard as one in the index, so both are scanned.
+scan_secrets() {
+  awk '
     function secret(l,  t) { t = tolower(l)
       return l ~ /(^|[^A-Za-z0-9])sk-[A-Za-z0-9]/ || l ~ /(^|[^A-Za-z0-9])ghp_/ || l ~ /(^|[^A-Za-z0-9])AKIA[0-9A-Z]/ ||
         t ~ /bearer / || t ~ /password=/ || t ~ /token=/ || t ~ /\?[^ ]*(key|secret|token)=/ }
-    secret($0) { printf "%s:%d: looks like a secret or a query-string credential\n", f, NR; bad++ }
+    secret($0) { printf "%s:%d: looks like a secret or a query-string credential\n", FILENAME, FNR }
+  ' "$@"
+}
+
+lint_index() {
+  awk -v f="$1" -v bad="$2" -v have="$3" -v bytes="$(wc -c < "$1")" '
+    function flag(m) { printf "%s:%d: %s\n", f, NR, m; bad++ }
     /<!--/ { inc = 1 }
     inc { if (/-->/) inc = 0; next }
-    /^[ \t]*$/ { next }
+    /^[ \t]*$/ || /^#/ { next }
     {
-      if ($0 ~ /^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] /) lessons++
-      else if ($0 ~ /^RETRACTED [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] \(/) { lessons++; retracted++ }
-      else { printf "%s:%d: not a lesson line (expected `- YYYY-MM-DD ...` or `RETRACTED YYYY-MM-DD (why): ...`)\n", f, NR; bad++ }
-      if (seen[$0]++) { printf "%s:%d: exact duplicate of an earlier line\n", f, NR; bad++ }
+      if ($0 ~ /^RETRACTED [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] \(/) { lessons++; retracted++ }
+      else if ($0 ~ /^- \[[^]]+\]\([^)]+\)/) {
+        lessons++
+        rest = $0; sub(/^- \[[^]]+\]\([^)]+\)/, "", rest)
+        target = $0; sub(/^- \[[^]]+\]\(/, "", target); sub(/\).*$/, "", target)
+        if (rest !~ /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) flag("no YYYY-MM-DD date after the link (a date in the link target does not count)")
+        else if (rest !~ /\[[^]]+\]/) flag("no [scope] after the date")
+        else if (have != "" && !index(have, "|" target "|")) flag("links to " target ", which is not a file in this directory")
+      }
+      else flag("not a lesson line (expected `- [Title](topic.md) — YYYY-MM-DD [scope] claim ...` or `RETRACTED YYYY-MM-DD (why): ...`)")
+      if (seen[$0]++) flag("exact duplicate of an earlier line")
     }
     END {
       if (NR > 200) { printf "%s: %d lines (max 200)\n", f, NR; bad++ }
@@ -58,7 +72,15 @@ IFS='
 '
 for f in $files; do
   [ "$prune" -eq 1 ] && prune_file "$f"
-  lint_file "$f" || rc=1
+  dir=$(dirname "$f")
+  # An empty `have` means the directory could not be listed at all, and the link check is skipped rather than failed.
+  if topics=$(cd "$dir" && find . -name '*.md' ! -name MEMORY.md | sed 's|^\./||' | sort); then have="|$(printf '%s|' $topics)"; else topics=""; have=""; fi
+  set --
+  for t in $topics; do set -- "$@" "$dir/$t"; done
+  secrets=$(scan_secrets "$f" "$@")
+  n=0
+  [ -n "$secrets" ] && { printf '%s\n' "$secrets"; n=$(printf '%s\n' "$secrets" | awk 'END { print NR }'); rc=1; }
+  lint_index "$f" "$n" "$have" || rc=1
 done
 [ "$rc" -eq 0 ] || echo "memory-lint: FAIL" >&2
 exit "$rc"

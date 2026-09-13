@@ -78,6 +78,6 @@ UNRESOLVED
 ## Hard rules
 
 - **Read-only.** No edits, no mutating commands, no fixes proposed — describe what is, not what should be.
-- **Cite or omit.** Every entry points at a real `path:line`; a guess goes under UNRESOLVED.
+- **Cite or omit.** Every entry points at a `path:line` you opened **in this repository** during this run. Never cite a path you inferred, remembered, or saw elsewhere — no memory of another project is evidence here. Anything you could not open goes under UNRESOLVED.
 - **Backend only.** UI components, hooks, and styling belong to `frontend-investigator`; note a boundary you hit under COVERAGE and move on.
 - **Stay compact.** Over 4,000 characters, cut RISKS and ANSWERS entries first; never drop UNRESOLVED.

@@ -16,12 +16,14 @@ else
   agent=$(field agent_type); cwd=$(field cwd)
 fi
 [ "$stop" = stop ] && exit 0
-agent=${agent#agent-skills:}
-case $agent in architect|manual-qa) ;; *) exit 0 ;; esac
+bare=${agent##*:}
+case $bare in architect|manual-qa) ;; *) exit 0 ;; esac
+# Claude Code names the directory after the agent as invoked: `architect/` bare, `agent-skills-architect/` under the plugin.
+dirs=$(printf '%s' "$agent" | tr ':' '-')
+case $dirs in *[!A-Za-z0-9_-]*) dirs=$bare ;; esac
+[ "$dirs" = "$bare" ] || dirs="$dirs $bare"
 [ -n "$cwd" ] || cwd=${CLAUDE_PROJECT_DIR:-$PWD}
 root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || root=$cwd
-rel=".claude/agent-memory-local/$agent/MEMORY.md"
-[ -f "$root/$rel" ] || exit 0
 
 lint=""
 for candidate in "$(dirname "$0")/../bin/memory-lint" "${HOME:-}/.claude/bin/memory-lint" "$(command -v memory-lint 2>/dev/null)"; do
@@ -29,8 +31,13 @@ for candidate in "$(dirname "$0")/../bin/memory-lint" "${HOME:-}/.claude/bin/mem
 done
 [ -n "$lint" ] || exit 0
 
-out=$("$lint" "$root/$rel" 2>/dev/null); rc=$?
-[ "$rc" -eq 1 ] && [ -n "$out" ] || exit 0
-msgs=$(printf '%s\n' "$out" | head -n 8 | tr '\t' ' ' | tr -d '\000-\011\013-\037' | sed 's/\\/\\\\/g; s/"/\\"/g' | awk '{ s = s (NR > 1 ? "\\n" : "") $0 } END { printf "%s", s }')
-printf '{"decision":"block","reason":"memory-lint failed for %s — fix these lines, then finish:\\n%s"}\n' "$rel" "$msgs"
+for d in $dirs; do
+  rel=".claude/agent-memory-local/$d/MEMORY.md"
+  [ -f "$root/$rel" ] || continue
+  out=$("$lint" "$root/$rel" 2>/dev/null); rc=$?
+  [ "$rc" -eq 1 ] && [ -n "$out" ] || continue
+  msgs=$(printf '%s\n' "$out" | head -n 8 | tr '\t' ' ' | tr -d '\000-\011\013-\037' | sed 's/\\/\\\\/g; s/"/\\"/g' | awk '{ s = s (NR > 1 ? "\\n" : "") $0 } END { printf "%s", s }')
+  printf '{"decision":"block","reason":"memory-lint failed for %s — fix these lines, then finish:\\n%s"}\n' "$rel" "$msgs"
+  exit 0
+done
 exit 0

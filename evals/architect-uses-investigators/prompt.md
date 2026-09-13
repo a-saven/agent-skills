@@ -1,10 +1,12 @@
 ---
-description: A cross-boundary change (API route + page) must be scouted by the investigators before the architect designs, and the plan must cite files as path:line. Both graders are scored in both arms on purpose; this case guards the mechanism, not the delta.
+description: A change whose slice spans a route, its service, its schema and the component that renders it must be scouted before the architect designs, and the plan must cite files the scouts returned. The prompt names no file, so the chain only comes out of tracing imports. Needs --scaffold.
 tags: [architect]
-max_turns: 40
-timeout_seconds: 1200
+max_turns: 60
+timeout_seconds: 1800
 allowed_tools: [Read, Glob, Grep, Agent, Skill]
-expected_outcome: At least one Agent call whose subagent_type is frontend-investigator or backend-investigator; the final reply contains at least one path:line citation.
+expected_outcome: At least one Agent call whose subagent_type is frontend-investigator or backend-investigator; the final reply cites at least two path:line entries that came back in a Context Bundle.
 ---
 
-Plan adding a CSV export of orders to the small app in the additional working directory (`fixtures/app`: an Express API under `src/`, a React page under `web/`). It should sit next to the existing JSON export and be reachable from the orders page the same way. Put the plan in your reply rather than a file: backend, frontend, how to verify, and cite every file you relied on as path:line.
+Operators want to pull the orders they are currently looking at — same filters, same sort — out of this app as a spreadsheet they can open in Excel: one row per line item, with the order's reference, customer and status repeated on every row. Before they commit to the download they want to see how many rows it will be.
+
+Plan it against this repository: what changes where, in edit order; the contract between the parts; how to verify it. Cite every file you relied on as `path:line`. Put the plan in your reply, not in a file.

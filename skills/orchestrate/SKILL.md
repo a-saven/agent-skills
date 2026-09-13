@@ -65,7 +65,7 @@ Tier answers *how much model* a node gets; the specialist answers *what kind of 
 - test-writing nodes → `automation-qa`
 - review nodes → `backend-reviewer` / `frontend-reviewer` / `security-reviewer` (reviewer at least one tier above the author on critical paths, as in Phase 4)
 - live verification of a running app → `manual-qa` (via the `qa-run` skill)
-- context-gathering before design → `frontend-investigator` / `backend-investigator` (haiku), dispatched by the architect or by you when you already know the surfaces
+- context-gathering before design → `frontend-investigator` / `backend-investigator`, dispatched by the architect or by you when you already know the surfaces
 
 Complex-class design → dispatch `architect` with the task, the context you already hold (Phase 1 findings, answered questions, any Context Bundle verbatim so it is not re-scouted), and whether a human is reachable for its grill step; consume its plan. You still route and execute Phases 3–4 — the architect plans, it does not spawn engineers or reviewers.
 
@@ -116,7 +116,7 @@ The reviewer must sit at least one tier above the author on critical paths.
 2. Sonnet output → verified mechanically (run the exact acceptance-criteria commands: `bun test`, typecheck, lint), plus your own spot-check of the diff for anything security-relevant, schema-touching, or API-shape-changing. Full review by you only on critical paths.
 3. Your own output → same mechanical gates. You are not exempt.
 4. Merge branches in DAG order. **Resolve conflicts yourself** — a conflict is a semantic decision and delegating it is how silent breakage enters. Run the full suite once on the integrated result, then remove the worktrees. Refresh the repo graph if one is in use and no post-commit hook does it.
-5. **Final report:** what shipped, per-node routing and rough token cost, every `ASSUMPTION:` made, anything deferred, anything worth flagging for follow-up. Short. No victory laps.
+5. **Final report:** what shipped, per-node routing and rough token cost, every `ASSUMPTION:` made, anything deferred, anything worth flagging for follow-up, and the architect's `Lessons:` line, verbatim. Short. No victory laps.
 
 ## Token economy
 

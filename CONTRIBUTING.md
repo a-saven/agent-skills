@@ -17,11 +17,11 @@ Everything in this repo ends up in someone's context window. A change is good wh
 
 ## Memory lines
 
-Agents with `memory:` keep `.claude/agent-memory-local/<agent>/MEMORY.md` in the project they run in, one lesson per line:
+Agents with `memory:` keep a memory directory in the project they run in, and Claude Code names it after the agent as invoked — `.claude/agent-memory-local/architect/` under a symlink install, `.claude/agent-memory-local/agent-skills-architect/` under the plugin (observed on 2.1.270). Its `MEMORY.md` is an index, one pointer line per lesson, and the detail lives in a topic file beside it:
 
-    - YYYY-MM-DD [scope] claim — verified-by: <method> — evidence: <path:line or URL> — recheck: <when it may go stale>
+    - [Title](topic-slug.md) — YYYY-MM-DD [scope] claim — verified-by: <method> — evidence: <path:line or URL> — recheck: <when it may go stale>
 
-Every line loads on every spawn of that agent, so the 60-lesson cap is a budget, not a target. Retract by prefixing `RETRACTED YYYY-MM-DD (<why>): `, never by deleting, so a wrong lesson is not re-learned. Never secrets, tokens, cookies, query-string URLs or personal data; credentials stay in `.claude/qa.local.json` and are referenced by path. `bin/memory-lint <file>` checks this; `hooks/memory-guard.sh` runs it when `architect` or `manual-qa` stops and hands the first 8 lint lines back once (a one-shot repair prompt: with `stop_hook_active: true` the agent may still finish with an invalid file). A new memory agent must be added to the SubagentStop matcher in `hooks/hooks.json` and `install.sh`. `tests/fixtures/memory-good/` and `memory-bad/` show a passing and a failing file.
+Every line loads on every spawn of that agent, so the 60-lesson cap is a budget, not a target. The date and the `[scope]` come after the link (a date in the file name does not count) and the linked file must exist. Retract by prefixing `RETRACTED YYYY-MM-DD (<why>): `, never by deleting, so a wrong lesson is not re-learned. Never secrets, tokens, cookies, query-string URLs or personal data, in the index or in a topic file; credentials stay in `.claude/qa.local.json` and are referenced by path. `bin/memory-lint <file>` checks this — the contract on the index, the secret patterns on the topic files too; `hooks/memory-guard.sh` runs it against both directory names when `architect` or `manual-qa` stops and hands the first 8 lint lines back once (a one-shot repair prompt: with `stop_hook_active: true` the agent may still finish with an invalid file). A new memory agent must be added to the SubagentStop matcher in `hooks/hooks.json` and `install.sh`. `tests/fixtures/memory-good/` and `memory-bad/` show a passing and a failing directory.
 
 ## Scripts and hooks
 

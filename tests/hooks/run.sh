@@ -152,9 +152,10 @@ valid_json() {
   printf '%s' "$2" | python3 -c 'import json, sys; json.load(sys.stdin)' 2>/dev/null && pass "$1" || flunk "$1" "$2"
 }
 mrepo="$work/mrepo"; mem="$mrepo/.claude/agent-memory-local"
-mkdir -p "$mem/manual-qa" "$mem/architect" "$mrepo/sub" && git -C "$mrepo" init -q
-cp "$fx/memory-good/MEMORY.md" "$mem/manual-qa/MEMORY.md"
-cp "$fx/memory-bad/MEMORY.md" "$mem/architect/MEMORY.md"
+put_mem() { rm -rf "$2"; mkdir -p "$2"; cp "$fx/$1"/*.md "$2/"; }
+mkdir -p "$mrepo/sub" && git -C "$mrepo" init -q
+put_mem memory-good "$mem/manual-qa"
+put_mem memory-bad "$mem/architect"
 
 out=$(guard "$mrepo" false manual-qa); silent "guard: good MEMORY.md exits 0 silently" "$out"
 esc=$(printf '%s' "$mrepo" | sed 's|/|\\/|g')
@@ -166,7 +167,7 @@ expect_json "guard: bad MEMORY.md prints JSON" "$out"
 expect_has "guard: JSON carries decision block" "$out" '"decision":"block"'
 expect_has "guard: reason names the file" "$out" 'memory-lint failed for .claude/agent-memory-local/architect/MEMORY.md'
 expect_has "guard: reason carries the lint messages" "$out" 'looks like a secret'
-expect_has "guard: reason keeps the eighth lint line" "$out" 'MEMORY.md:11: not a lesson line'
+expect_has "guard: reason keeps the eighth lint line, from a topic file" "$out" 'leak.md:7: looks like a secret'
 case $out in *'exact duplicate'*) flunk "guard: reason must stop after 8 lint lines" "$out" ;; *) pass "guard: reason stops after 8 lint lines" ;; esac
 [ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] && pass "guard: output is a single line" || flunk "guard: single line" "$out"
 valid_json "guard: bad MEMORY.md output is valid JSON" "$out"
@@ -176,14 +177,22 @@ out=$(guard "$mrepo" true architect); silent "guard: stop_hook_active true is si
 expect_json "guard: stop_hook_active as the string \"true\" is not the boolean" "$(guard "$mrepo" '"true"' architect)"
 out=$(guard "$mrepo" false backend-reviewer); silent "guard: backend-reviewer is not checked" "$out"
 out=$(guard "$mrepo" false agent-skills:backend-reviewer); silent "guard: agent-skills:backend-reviewer is not checked" "$out"
-cp "$fx/memory-bad/MEMORY.md" "$mem/manual-qa/MEMORY.md"
-expect_has "guard: plugin-scoped agent-skills:manual-qa is checked" "$(guard "$mrepo" false agent-skills:manual-qa)" 'agent-memory-local/manual-qa/MEMORY.md'
-cp "$fx/memory-good/MEMORY.md" "$mem/manual-qa/MEMORY.md"
-rm -f "$mem/architect/MEMORY.md"
+put_mem memory-bad "$mem/agent-skills-manual-qa"
+rm -rf "$mem/manual-qa"
+expect_has "guard: the namespaced directory alone is linted" "$(guard "$mrepo" false agent-skills:manual-qa)" 'agent-memory-local/agent-skills-manual-qa/MEMORY.md'
+put_mem memory-good "$mem/manual-qa"
+expect_has "guard: bare good + namespaced bad blocks on the namespaced file" "$(guard "$mrepo" false agent-skills:manual-qa)" 'agent-memory-local/agent-skills-manual-qa/MEMORY.md'
+put_mem memory-good "$mem/agent-skills-manual-qa"
+put_mem memory-bad "$mem/manual-qa"
+expect_has "guard: namespaced good + bare bad blocks on the bare file" "$(guard "$mrepo" false agent-skills:manual-qa)" 'agent-memory-local/manual-qa/MEMORY.md'
+rm -rf "$mem/agent-skills-manual-qa" "$mem/manual-qa"
+out=$(guard "$mrepo" false agent-skills:manual-qa); silent "guard: neither candidate directory exists is silent" "$out"
+put_mem memory-good "$mem/manual-qa"
+rm -rf "$mem/architect"
 out=$(guard "$mrepo" false architect); silent "guard: missing MEMORY.md is silent" "$out"
 
-plain="$work/plainmem"; mkdir -p "$plain/.claude/agent-memory-local/architect"
-cp "$fx/memory-bad/MEMORY.md" "$plain/.claude/agent-memory-local/architect/MEMORY.md"
+plain="$work/plainmem"
+put_mem memory-bad "$plain/.claude/agent-memory-local/architect"
 expect_json "guard: outside a git repo uses cwd" "$(guard "$plain" false architect)"
 out=$(guard "$work/does-not-exist" false architect); silent "guard: missing cwd is silent" "$out"
 out=$(printf 'not json at all' | sh "$guard"); silent "guard: malformed stdin exits 0 silently" "$out"
