@@ -1,1 +1,8 @@
 .DS_Store
+graphify-out/
+.codegraph/
+.claude/qa.local.json
+.claude/tickets.local.json
+.claude/handoffs/
+.claude/agent-memory-local/
+evals/results/
