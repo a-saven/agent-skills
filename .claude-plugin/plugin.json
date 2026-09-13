@@ -1,0 +1,10 @@
+{
+  "name": "agent-skills",
+  "version": "0.2.0",
+  "description": "Cost-aware orchestration, a specialist subagent crew with local memory, investigators for the architect, manual QA (web/iOS), human-readable tickets, knowledge graphs, and a handoff-before-compact flow.",
+  "author": { "name": "a-saven" },
+  "homepage": "https://github.com/a-saven/agent-skills",
+  "repository": "https://github.com/a-saven/agent-skills",
+  "license": "MIT",
+  "keywords": ["orchestration", "subagents", "architect", "qa", "playwright", "ios", "tickets", "knowledge-graph", "codegraph", "handoff", "context", "memory"]
+}
