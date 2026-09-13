@@ -1,6 +1,6 @@
 ---
 name: ticket
-description: Create Linear or Jira tickets that read like a human wrote them — not AI slop. Detects which tracker a project uses (Linear vs Jira) and remembers the team/project mapping per project, asking only once. Handles both bug reports and new-feature handoffs, written for the tester who picks it up — a bug gets reproduction steps + where it lives; a feature gets what it solves, where to find it, the design, and how to test it. Writes a short, scannable ticket (plain language, real paths/flows, concrete test steps, observable acceptance) and enriches it from whatever useful MCPs are connected — renders Figma frames, pulls Sentry error context, reads the originating Slack thread, links the relevant PR — using only what's installed and relevant. Posts recent test results (qa-run, test runs, CI) and long evidence as a comment instead of bloating the description. Use when the user asks to "create a ticket", "file a bug", "open an issue", "make a Linear/Jira ticket", "log this", or invokes /ticket. Runs in the MAIN thread so it can read the conversation and confirm the draft before creating.
+description: "Creates Linear or Jira tickets that read like a human wrote them: short, scannable, real paths, concrete test steps, observable acceptance, enriched from connected MCPs and confirmed with the user before posting. Use when the user asks to \"create a ticket\", \"file a bug\", \"open an issue\", \"make a Linear/Jira ticket\", \"log this\", or invokes /ticket."
 ---
 
 # ticket — human-readable Linear / Jira ticket creator

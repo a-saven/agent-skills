@@ -1,12 +1,6 @@
 ---
 name: worktree-graphs
-description: >-
-  Check, seed, or repair the CodeGraph index and Graphify graph across a repo's git
-  worktrees. Use when a session is running in a worktree and CodeGraph looks absent or
-  wrong, when the user asks whether the graphs are fresh / "check all worktrees", after
-  creating a worktree (Orca, `git worktree add`, or an agent harness), or when a graph
-  answer disagrees with the code actually on disk. Also covers why a Graphify graph goes
-  stale after `git pull` and how to force a refresh.
+description: "Checks, seeds, or repairs the CodeGraph index and Graphify graph across a repo's git worktrees. Use when a session runs in a worktree and CodeGraph looks absent or wrong, when the user asks whether the graphs are fresh or to \"check all worktrees\", after creating a worktree, or when a graph answer disagrees with the code actually on disk."
 ---
 
 # Worktree graphs

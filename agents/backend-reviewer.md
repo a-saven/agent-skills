@@ -1,6 +1,6 @@
 ---
 name: backend-reviewer
-description: Use proactively after changes to backend / API / server-side code — route handlers, controllers, services, database queries, migrations, background jobs, webhooks, or server config. Invoke when files in the backend tree are edited. Produces a prioritized, cited findings report — does not edit code. Skip for pure docs, comments, or test-only edits that don't touch production code paths.
+description: "Reviews backend / API / server-side code; returns a prioritized, cited findings report, does not edit code. Use proactively after changes to route handlers, controllers, services, database queries, migrations, jobs, webhooks, or server config — whenever backend-tree files are edited. Skip for pure docs, comments, or test-only edits off production code paths."
 tools: Read, Grep, Glob, Bash
 model: inherit
 ---

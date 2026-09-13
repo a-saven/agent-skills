@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Orchestrate non-trivial engineering work by scoping it, decomposing it into a parallel task DAG, delegating each node to the cheapest model tier that can meet its acceptance criteria, and verifying before integration. Use this whenever a task involves more than a single mechanical edit — implementing a feature, a cross-cutting refactor, a bugfix with an unknown root cause, a migration, or anything where you are about to spawn subagents or start editing several files. Also use it when the user says "plan this", "break this down", "delegate", "route this", "use subagents", "orchestrate", or hands over a vague ask like "add auth" that needs pinning down before any code is written. Reads the repo's CLAUDE.md for stack conventions and forwards them into every delegated brief. Written for a top-tier orchestrator model; do not skip it just because the task looks tractable solo — routing is the point.
+description: "Scopes non-trivial work, decomposes it into a parallel task DAG, routes each node to the cheapest model tier that meets its acceptance criteria, and verifies before integrating. Use beyond one mechanical edit, before spawning subagents, or on \"plan this\", \"break this down\", \"delegate\", \"route this\", \"use subagents\", \"orchestrate\", or a vague ask like \"add auth\"."
 ---
 
 # Orchestrate
