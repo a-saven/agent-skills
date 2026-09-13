@@ -1,0 +1,160 @@
+#!/bin/sh
+set -eu
+command -v python3 >/dev/null 2>&1 || { echo "crew-cost: python3 is required" >&2; exit 2; }
+exec python3 - "$@" <<'PY'
+import json, os, re, sys
+
+USAGE = """usage: crew-cost [<transcript.jsonl>] [--json]
+Token counts per agent type for one Claude Code session: the main transcript plus every child transcript under
+<session>/subagents/. Counts only, no prices. Reads only; never writes.
+Default transcript: the newest *.jsonl in ~/.claude/projects/<cwd with "/" replaced by "-">/ — observed on
+Claude Code 2.1.270 (macOS) for paths made of letters, digits, `/`, `-` and `.`; if your project directory is
+encoded differently, pass the path."""
+COLS = ("input", "cache_write", "cache_read", "output")
+KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+CHILD_ID = re.compile(r"agent(?:Id|_id)\W{0,4}([A-Za-z0-9]{8,})")
+models = {}
+
+def bucket():
+    return dict(runs=0, input=0, cache_write=0, cache_read=0, output=0, total=0, partial=False)
+
+def records(path, b):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    b["partial"] = True
+                    continue
+                if isinstance(r, dict):
+                    yield r
+                else:
+                    b["partial"] = True
+    except OSError:
+        b["partial"] = True
+
+def add(b, model, usage):
+    m = models.setdefault(model, bucket())
+    for col, key in zip(COLS, KEYS):
+        try:
+            n = int(usage.get(key) or 0)
+        except (TypeError, ValueError):
+            n = 0; b["partial"] = m["partial"] = True
+        b[col] += n; m[col] += n; b["total"] += n; m["total"] += n
+
+def tally(path, b, on_record=None):
+    last = {}  # message.id -> (model, usage); streaming writes one record per block, the last one is final
+    for r in records(path, b):
+        m = r.get("message")
+        if not isinstance(m, dict):
+            continue
+        usage = m.get("usage") if r.get("type") == "assistant" else None
+        if isinstance(usage, dict) and any(usage.get(k) for k in KEYS):
+            last[m.get("id") or r.get("uuid")] = (m.get("model") or "?", usage)
+        if on_record:
+            on_record(r, m)
+    for model, usage in last.values():
+        add(b, model, usage)
+
+def merge(dst, src):
+    for c in COLS + ("total",):
+        dst[c] += src[c]
+    dst["partial"] = dst["partial"] or src["partial"]
+
+def meta(path):
+    try:
+        with open(path[:-6] + ".meta.json", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+def newest():
+    d = os.path.join(os.path.expanduser("~"), ".claude", "projects", os.getcwd().replace("/", "-"))
+    files = [os.path.join(d, f) for f in os.listdir(d)] if os.path.isdir(d) else []
+    files = [f for f in files if f.endswith(".jsonl") and os.path.isfile(f)]
+    if not files:
+        sys.exit(f"crew-cost: no transcript found under {d}; pass the path")
+    return max(files, key=os.path.getmtime)
+
+def nums(b):
+    return [f"{b[c]:,}" for c in COLS] + [f"{b['total']:,}"]
+
+def line(w, name, *cells, tag=""):
+    return f"{name:<{w}} | " + " | ".join(f"{c:>11}" for c in cells) + tag
+
+def main(argv):
+    if "-h" in argv or "--help" in argv:
+        print(USAGE); return 0
+    paths = [a for a in argv if a != "--json"]
+    if len(paths) > 1 or any(p.startswith("-") for p in paths):
+        print(USAGE, file=sys.stderr); return 2
+    path = paths[0] if paths else newest()
+    if not os.path.isfile(path):
+        sys.exit(f"crew-cost: {path}: no such file")
+    calls, found, main_b = {}, {}, bucket()  # tool_use id -> subagent_type; tool_use id -> child id
+
+    def scan(r, m):
+        for c in m.get("content") if isinstance(m.get("content"), list) else []:
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "tool_use" and c.get("name") == "Agent":
+                inp = c.get("input")
+                calls[c.get("id")] = inp.get("subagent_type") if isinstance(inp, dict) else None
+            elif c.get("type") == "tool_result" and c.get("tool_use_id") in calls:
+                tur = r.get("toolUseResult")
+                cid = tur.get("agentId") if isinstance(tur, dict) else None
+                if not cid:
+                    hit = CHILD_ID.search(json.dumps(c.get("content")))
+                    cid = hit and hit.group(1)
+                if cid:
+                    found[c["tool_use_id"]] = str(cid)
+
+    tally(path, main_b, scan)
+    children = {}  # child id -> transcript; workflow-spawned children sit one directory deeper
+    for root, _, files in os.walk(os.path.join(path[:-6] if path.endswith(".jsonl") else path, "subagents")):
+        for f in files:
+            if f.startswith("agent-") and f.endswith(".jsonl"):
+                children[f[6:-6]] = os.path.join(root, f)
+    tallies = {}  # scan the children too: an architect's investigators are grandchildren of the main thread
+    for cid, f in children.items(): tallies[cid] = bucket(); tally(f, tallies[cid], scan)
+    metas = {cid: meta(f) for cid, f in children.items()}
+    for cid, mt in metas.items():
+        if mt.get("toolUseId") in calls and mt["toolUseId"] not in found:
+            found[mt["toolUseId"]] = cid
+    agents, seen = {}, set()
+    for tid, cid in found.items():
+        if cid in seen:
+            continue
+        seen.add(cid)
+        b = agents.setdefault(calls[tid] or metas.get(cid, {}).get("agentType") or "general-purpose", bucket())
+        b["runs"] += 1
+        if cid in tallies:
+            merge(b, tallies.pop(cid))
+        else:
+            b["partial"] = True
+    for t in tallies.values():
+        b = agents.setdefault("unknown", bucket()); b["runs"] += 1; merge(b, t)
+
+    out = {"transcript": path, "agents": agents, "unattributed": len(tallies),
+           "models": {k: {c: v[c] for c in COLS + ("total",)} for k, v in models.items()},
+           "main": {c: main_b[c] for c in COLS + ("total", "partial")}}
+    if "--json" in argv:
+        json.dump(out, sys.stdout, indent=1); print(); return 0
+    w = max([12] + [len(k) for k in list(agents) + list(models)])
+    print(f"crew-cost: {path}")
+    print("tokens per agent type, from the child transcripts (main thread below); no prices")
+    print(line(w, "agent", "runs", *COLS, "total"))
+    for name, b in sorted(agents.items(), key=lambda kv: -kv[1]["total"]):
+        print(line(w, name, b["runs"], *nums(b), tag="  partial" if b["partial"] else ""))
+    print(); print("per model, main thread + subagents together")
+    print(line(w, "model", *COLS, "total"))
+    for name, b in sorted(models.items(), key=lambda kv: -kv[1]["total"]):
+        print(line(w, name, *nums(b)))
+    print(); print(line(w, "main thread", "-", *nums(main_b), tag="  partial" if main_b["partial"] else ""))
+    print(f"unattributed subagents: {len(tallies)}" + (" (no Agent call names them; counted as unknown)" if tallies else ""))
+    return 0
+
+sys.exit(main(sys.argv[1:]))
+PY
