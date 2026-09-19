@@ -787,10 +787,10 @@ export function OrdersPage() {
 }
 EOF
 
-i=1
-while [ "$i" -le 10 ]; do
-  n=$(printf '%02d' "$i")
-  sed "s/NN/$n/g" > "src/services/sNN.ts.tmp" <<'EOF'
+widgets="01 02 03 04 05 06 07 08 09 10"
+
+for n in $widgets; do
+  sed "s/NN/$n/g" > "src/services/s$n.ts" <<'EOF'
 import { query } from "../db/client";
 
 export type WidgetNN = {
@@ -806,9 +806,8 @@ export async function listWidgetsNN(limit = 25): Promise<WidgetNN[]> {
   );
 }
 EOF
-  mv "src/services/sNN.ts.tmp" "src/services/s$n.ts"
 
-  sed "s/NN/$n/g" > "src/routes/rNN.ts.tmp" <<'EOF'
+  sed "s/NN/$n/g" > "src/routes/r$n.ts" <<'EOF'
 import type { Express } from "express";
 import { route } from "../lib/http";
 import { listWidgetsNN } from "../services/sNN";
@@ -822,9 +821,8 @@ export function registerRNN(app: Express): void {
   );
 }
 EOF
-  mv "src/routes/rNN.ts.tmp" "src/routes/r$n.ts"
 
-  sed "s/NN/$n/g" > "web/src/components/cNN.tsx.tmp" <<'EOF'
+  sed "s/NN/$n/g" > "web/src/components/c$n.tsx" <<'EOF'
 import { useEffect, useState } from "react";
 import { getJson } from "../api/client";
 import type { WidgetNN } from "../../../src/services/sNN";
@@ -843,42 +841,24 @@ export function WidgetNNPanel() {
   );
 }
 EOF
-  mv "web/src/components/cNN.tsx.tmp" "web/src/components/c$n.tsx"
-  i=$((i + 1))
 done
 
 {
   echo 'import type { Express } from "express";'
-  i=1
-  while [ "$i" -le 10 ]; do
-    printf 'import { registerR%02d } from "./r%02d";\n' "$i" "$i"
-    i=$((i + 1))
-  done
+  for n in $widgets; do printf 'import { registerR%s } from "./r%s";\n' "$n" "$n"; done
   echo
   echo 'export function registerGeneratedRoutes(app: Express): void {'
-  i=1
-  while [ "$i" -le 10 ]; do
-    printf '  registerR%02d(app);\n' "$i"
-    i=$((i + 1))
-  done
+  for n in $widgets; do printf '  registerR%s(app);\n' "$n"; done
   echo '}'
 } > src/routes/generated.ts
 
 {
-  i=1
-  while [ "$i" -le 10 ]; do
-    printf 'import { Widget%02dPanel } from "../components/c%02d";\n' "$i" "$i"
-    i=$((i + 1))
-  done
+  for n in $widgets; do printf 'import { Widget%sPanel } from "../components/c%s";\n' "$n" "$n"; done
   echo
   echo 'export function WidgetsPage() {'
   echo '  return ('
   echo '    <section className="widgets">'
-  i=1
-  while [ "$i" -le 10 ]; do
-    printf '      <Widget%02dPanel />\n' "$i"
-    i=$((i + 1))
-  done
+  for n in $widgets; do printf '      <Widget%sPanel />\n' "$n"; done
   echo '    </section>'
   echo '  );'
   echo '}'

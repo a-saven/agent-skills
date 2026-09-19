@@ -133,7 +133,7 @@ fi
 
 # 3: shell syntax by shebang
 find_scripts() {
-  for f in bin/* hooks/*.sh install.sh templates/*.sh.example; do [ -f "$f" ] && echo "$f"; done
+  for f in bin/* hooks/*.sh install.sh templates/*.sh.example evals/*/*.sh; do [ -f "$f" ] && echo "$f"; done
   [ -d tests ] && find tests -name '*.sh' -type f | sort
   return 0
 }

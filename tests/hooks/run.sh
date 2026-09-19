@@ -113,6 +113,7 @@ out=$(load l1 "$repo")
 expect_json "load: open handoff on the current branch prints JSON" "$out"
 expect_has "load: JSON names the file" "$out" "$doc"
 expect_has "load: JSON states open" "$out" "(open, "
+expect_has "load: JSON states the age from the file's mtime" "$out" "(open, 0h old)"
 expect_has "load: JSON is a SessionStart hookSpecificOutput" "$out" '"hookEventName":"SessionStart"'
 case $out in *"## Goal"*|*"Export CSV"*) flunk "load: body must never be printed" "$out" ;; *) pass "load: body is not printed" ;; esac
 [ "$(printf '%s\n' "$out" | wc -l)" -le 3 ] && pass "load: output is at most 3 lines" || flunk "load: too many lines" "$out"

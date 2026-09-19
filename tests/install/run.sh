@@ -13,7 +13,7 @@ fail=0
 
 ok() { name=$1; shift; if "$@" >/dev/null 2>&1; then echo "PASS  $name"; else echo "FAIL  $name"; fail=1; fi; }
 count() { grep -c -- "$1" "$S" 2>/dev/null || true; }
-contains() { printf '%s' "$2" | grep -q -- "$1"; }
+contains() { printf '%s' "$2" | grep -E -q -- "$1"; }
 links_to() { [ -L "$1" ] && [ "$(readlink "$1")" = "$2" ]; }
 
 all_linked() {
@@ -42,7 +42,7 @@ mkdir -p "$H/.claude"
 printf '{\n  "model": "sonnet",\n  "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo keep-me"}]}]}\n}\n' > "$SEED"
 cp "$SEED" "$S"
 
-out=$(HOME="$H" bash "$REPO/install.sh" 2>&1); rc=$?
+out=$(HOME="$H" sh "$REPO/install.sh" 2>&1); rc=$?
 ok "install exits 0" test "$rc" -eq 0
 ok "every skill, agent, bin script and hook is symlinked into the repo" all_linked
 for f in bin/memory-lint hooks/context-nudge.sh hooks/handoff-load.sh hooks/memory-guard.sh; do
@@ -64,15 +64,15 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 
 cp "$S" "$TMP/after-first.json"
-out=$(HOME="$H" bash "$REPO/install.sh" 2>&1); rc=$?
+out=$(HOME="$H" sh "$REPO/install.sh" 2>&1); rc=$?
 ok "second install exits 0" test "$rc" -eq 0
 ok "second install reports all five hooks already present" test "$(printf '%s\n' "$out" | grep -c 'already present')" -eq 5
 ok "second install leaves settings.json unchanged" cmp -s "$S" "$TMP/after-first.json"
 ok "backup is not overwritten" cmp -s "$S.bak-agent-skills" "$SEED"
 
-out=$(HOME="$H" bash "$REPO/install.sh" --uninstall 2>&1); rc=$?
+out=$(HOME="$H" sh "$REPO/install.sh" --uninstall 2>&1); rc=$?
 ok "uninstall exits 0" test "$rc" -eq 0
-ok "uninstall prints what it removed" contains 'removed .*hooks/agent-skills\|removed .*skills/orchestrate' "$out"
+ok "uninstall prints what it removed" contains 'removed .*(hooks/agent-skills|skills/orchestrate)' "$out"
 ok "uninstall prints the memory guard hook and symlink" test "$(printf '%s\n' "$out" | grep -c 'removed .*memory-guard.sh')" -eq 2
 ok "uninstall removes every symlink into the repo" none_linked
 ok "uninstall removes the agent-skills hooks" test "$(count 'agent-skills/')" -eq 0 -a "$(count 'ensure >/dev/null')" -eq 0
@@ -83,13 +83,13 @@ SHIM="$TMP/shim"; mkdir -p "$SHIM"
 printf '#!/bin/sh\nprintf "Installed plugins:\\n\\n  > agent-skills@a-saven\\n    Version: 0.2.0\\n    Scope: user\\n    Status: v enabled\\n"\n' > "$SHIM/claude"
 chmod +x "$SHIM/claude"
 H2="$TMP/home-plugin"; mkdir -p "$H2"
-out=$(HOME="$H2" PATH="$SHIM:$PATH" bash "$REPO/install.sh" 2>&1); rc=$?
+out=$(HOME="$H2" PATH="$SHIM:$PATH" sh "$REPO/install.sh" 2>&1); rc=$?
 ok "install refuses while the plugin is enabled" test "$rc" -eq 1
 ok "refusal says one install path at a time" contains 'one install path at a time' "$out"
 ok "refusal installs nothing" test ! -e "$H2/.claude/skills"
 
 printf '#!/bin/sh\nprintf "Installed plugins:\\n\\n  > agent-skills@a-saven\\n    Version: 0.2.0\\n    Scope: user\\n    Status: x disabled\\n"\n' > "$SHIM/claude"
-out=$(HOME="$H2" PATH="$SHIM:$PATH" bash "$REPO/install.sh" 2>&1); rc=$?
+out=$(HOME="$H2" PATH="$SHIM:$PATH" sh "$REPO/install.sh" 2>&1); rc=$?
 ok "install proceeds while the plugin is disabled" test "$rc" -eq 0 -a -L "$H2/.claude/skills/orchestrate"
 
 exit $fail

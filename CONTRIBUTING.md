@@ -25,7 +25,7 @@ Every line loads on every spawn of that agent, so the 60-lesson cap is a budget,
 
 ## Scripts and hooks
 
-POSIX sh (`#!/bin/sh`, `set -eu`) unless bash is genuinely needed; `bin/check` runs `sh -n` or `bash -n` by shebang. Hooks finish in under 2 s and exit 0 with no output on any failure. Almost no comments: one line for a non-obvious why, nothing that restates the code.
+POSIX sh (`#!/bin/sh`, `set -eu`) unless bash is genuinely needed; `bin/check` runs `sh -n` or `bash -n` by shebang. Every script runs on macOS (BSD userland, bash 3.2 as `sh`) and Linux (GNU or uutils coreutils, dash, mawk), and CI runs `bin/check` on both. Use POSIX flags; where none exists, order the fallback so the first form fails cleanly on the other platform and check what comes back — GNU `stat -f` prints filesystem status before failing, so `stat -c %Y` goes before `stat -f %m`, and `date -v-8d` before `date -d '8 days ago'`. Use `grep -E` rather than `\|` in a basic regex. Hooks finish in under 2 s and exit 0 with no output on any failure. Almost no comments: one line for a non-obvious why, nothing that restates the code.
 
 ## Before a PR
 

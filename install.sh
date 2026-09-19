@@ -1,11 +1,11 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Symlink every skill, agent, bin script and hook in this repo into ~/.claude so
 # Claude Code picks them up globally. Idempotent — re-run after `git pull`
 # (symlinks mean updates land automatically anyway). `--uninstall` removes
 # exactly what this script added and nothing else; the settings backup it made stays.
-set -euo pipefail
+set -eu
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILLS_DIR="$HOME/.claude/skills"
 AGENTS_DIR="$HOME/.claude/agents"
 BIN_DIR="$HOME/.claude/bin"
