@@ -1,0 +1,12 @@
+{
+  "name": "a-saven",
+  "description": "Plugins by a-saven.",
+  "owner": { "name": "a-saven", "url": "https://github.com/a-saven" },
+  "plugins": [
+    {
+      "name": "agent-skills",
+      "source": "./",
+      "description": "Cost-aware orchestration, a specialist subagent crew with local memory, investigators for the architect, manual QA (web/iOS), human-readable tickets, knowledge graphs, and a handoff-before-compact flow."
+    }
+  ]
+}

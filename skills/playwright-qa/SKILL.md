@@ -1,6 +1,6 @@
 ---
 name: playwright-qa
-description: Fast, headless functional browser testing for any local web app via the global Playwright MCP — click-through flows, form submit + assert, login-gated paths, forced API-error states, mobile-viewport / offline / geolocation checks, and trace evidence. This is the DEFAULT and required way to drive a real browser for web QA (not unit/component tests); the Orca browser CLI is the fallback when the MCP tools aren't loaded, and Maestro covers native mobile apps. Triggers: "test the flow", "click through", "verify in the browser", "headless e2e", "reproduce the bug in the UI", "check the error state", "test mobile viewport".
+description: "Headless functional browser testing of a local web app via the global Playwright MCP (flows, forms, login, forced API errors, mobile/offline, traces); the default real-browser driver for web QA. Use on \"test the flow\", \"click through\", \"verify in the browser\", \"headless e2e\", \"reproduce the bug in the UI\", \"check the error state\", \"test mobile viewport\". Not for unit/component tests."
 ---
 
 # Playwright QA (headless, via Playwright MCP)

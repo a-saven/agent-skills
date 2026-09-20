@@ -1,0 +1,28 @@
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: pip install pyyaml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Claude Code for plugin validate (no model calls)
+        # Allowed to fail so bin/check still reports everything; --strict then fails on the SKIP rows it leaves.
+        run: npm i -g @anthropic-ai/claude-code@2.1.270
+        continue-on-error: true
+      - run: sh bin/check --strict

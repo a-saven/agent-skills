@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Orchestrate non-trivial engineering work by scoping it, decomposing it into a parallel task DAG, delegating each node to the cheapest model tier that can meet its acceptance criteria, and verifying before integration. Use this whenever a task involves more than a single mechanical edit — implementing a feature, a cross-cutting refactor, a bugfix with an unknown root cause, a migration, or anything where you are about to spawn subagents or start editing several files. Also use it when the user says "plan this", "break this down", "delegate", "route this", "use subagents", "orchestrate", or hands over a vague ask like "add auth" that needs pinning down before any code is written. Reads the repo's CLAUDE.md for stack conventions and forwards them into every delegated brief. Written for a top-tier orchestrator model; do not skip it just because the task looks tractable solo — routing is the point.
+description: "Scopes non-trivial work, decomposes it into a parallel task DAG, routes each node to the cheapest model tier that meets its acceptance criteria, and verifies before integrating. Use beyond one mechanical edit, before spawning subagents, or on \"plan this\", \"break this down\", \"delegate\", \"route this\", \"use subagents\", \"orchestrate\", or a vague ask like \"add auth\"."
 ---
 
 # Orchestrate
@@ -39,7 +39,7 @@ Build a real model of the task before spending on execution.
 
 - **Trivial** (typo, config bump, one mechanical edit) — no decomposition. Route straight to the cheapest tier, or just do it if writing the brief would take longer than the edit.
 - **Standard** (feature within existing patterns, bugfix with a known repro) — decompose into 2–5 subtasks.
-- **Complex** (new architecture, cross-cutting refactor, ambiguous requirements) — you own the design personally. Write the design down first; decompose only after it exists.
+- **Complex** (new architecture, cross-cutting refactor, ambiguous requirements) — design first: dispatch `architect` when the agents pack is installed (see "Routing to the specialist team"), else write the design down yourself; decompose only after it exists.
 
 **Produce a task DAG.** Nodes carry explicit inputs, outputs, and acceptance criteria. Edges are hard dependencies only — anything without an edge between it runs in parallel. If you find yourself drawing an edge because "it feels safer to do A first," that's not a dependency, that's sequencing you're paying for.
 
@@ -65,10 +65,11 @@ Tier answers *how much model* a node gets; the specialist answers *what kind of 
 - test-writing nodes → `automation-qa`
 - review nodes → `backend-reviewer` / `frontend-reviewer` / `security-reviewer` (reviewer at least one tier above the author on critical paths, as in Phase 4)
 - live verification of a running app → `manual-qa` (via the `qa-run` skill)
+- context-gathering before design → `frontend-investigator` / `backend-investigator`, dispatched by the architect or by you when you already know the surfaces
 
-This skill subsumes the `architect` agent's role: when you orchestrate, YOU are the planning authority — don't also invoke `architect`. It remains useful standalone, for sessions where someone wants a plan produced by a subagent without full orchestration.
+Complex-class design → dispatch `architect` with the task, the context you already hold (Phase 1 findings, answered questions, any Context Bundle verbatim so it is not re-scouted), and whether a human is reachable for its grill step; consume its plan. You still route and execute Phases 3–4 — the architect plans, it does not spawn engineers or reviewers.
 
-**Keep the work yourself when** the brief would be longer than the diff, the task is Complex-class design or security-critical or touches the orchestration layer itself, or two subagent attempts have already failed. Escalation terminates at you — never try a third attempt at the same tier.
+**Keep the work yourself when** the brief would be longer than the diff, the task is security-critical or touches the orchestration layer itself, or two subagent attempts have already failed. Escalation terminates at you — never try a third attempt at the same tier.
 
 ### Delegation brief contract
 
@@ -87,7 +88,18 @@ OUTPUT CONTRACT: unified diff or file list + a ≤10-line summary
   + an explicit list of any assumptions it made.
 ```
 
-A subagent that returns prose instead of meeting the output contract gets one correction, then escalates.
+### Repair packet (the one retry)
+
+A subagent that returns prose instead of the output contract, or whose output fails its acceptance criteria, gets one retry — the repair packet below — then escalates. GOAL, OUTPUT CONTRACT and ACCEPTANCE CRITERIA carry over; the packet replaces CONTEXT, and SCOPE narrows CONSTRAINTS' file list. Missing evidence → you inspect first; never a blind retry. The two-attempt ceiling and the escalation ladder stay as written. This saves the second full rediscovery (expected, not measured).
+
+```
+FAILED_CRITERION: the exact check that failed and its output.
+DIFF_REF: the branch/worktree and the files the first attempt produced.
+EVIDENCE: the failing lines, verbatim, ≤20.
+TRIED: what the first attempt did, from its summary.
+SCOPE: the files it may touch now. Nothing else.
+NEXT_CHECK: the exact command that must pass.
+```
 
 ## Phase 3 — Execute in parallel
 
@@ -104,7 +116,7 @@ The reviewer must sit at least one tier above the author on critical paths.
 2. Sonnet output → verified mechanically (run the exact acceptance-criteria commands: `bun test`, typecheck, lint), plus your own spot-check of the diff for anything security-relevant, schema-touching, or API-shape-changing. Full review by you only on critical paths.
 3. Your own output → same mechanical gates. You are not exempt.
 4. Merge branches in DAG order. **Resolve conflicts yourself** — a conflict is a semantic decision and delegating it is how silent breakage enters. Run the full suite once on the integrated result, then remove the worktrees. Refresh the repo graph if one is in use and no post-commit hook does it.
-5. **Final report:** what shipped, per-node routing and rough token cost, every `ASSUMPTION:` made, anything deferred, anything worth flagging for follow-up. Short. No victory laps.
+5. **Final report:** what shipped, per-node routing and rough token cost, every `ASSUMPTION:` made, anything deferred, anything worth flagging for follow-up, and the architect's `Lessons:` line, verbatim. Short. No victory laps.
 
 ## Token economy
 

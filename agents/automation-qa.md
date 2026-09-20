@@ -1,6 +1,6 @@
 ---
 name: automation-qa
-description: The automated-test author. Use proactively after a feature or bugfix is implemented, before requesting human review — and specifically when an exploratory/manual QA pass hands off its findings. Invoke when production code changed but there's no matching test change, or when a bug was just fixed (a regression test must lock in the fix). First checks whether the case is already covered, then writes the missing unit and integration tests across all affected parts. Writes test files only — never production code. Skip for pure docs/formatting or changes that only touch test files.
+description: "Writes the missing unit and integration tests for a diff, test files only, after checking existing coverage. Use proactively once a feature or bugfix lands, before human review: production code changed with no test change, a bug was just fixed (needs a regression test), or a manual QA pass handed off findings. Skip for pure docs/formatting or test-only changes."
 tools: Read, Grep, Glob, Write, Edit, Bash
 model: inherit
 ---

@@ -8,8 +8,8 @@ find_bin() {
   for p in "$@"; do [ -x "$p" ] && { echo "$p"; return 0; }; done
   return 0
 }
-CODEGRAPH=${CODEGRAPH_BIN:-$(find_bin codegraph "$HOME/.volta/bin/codegraph" "$HOME/.local/bin/codegraph" "$HOME/.bun/bin/codegraph" /usr/local/bin/codegraph /opt/homebrew/bin/codegraph)}
-GRAPHIFY=${GRAPHIFY_BIN:-$(find_bin graphify $HOME/Library/Python/*/bin/graphify "$HOME/.local/bin/graphify" /usr/local/bin/graphify /opt/homebrew/bin/graphify)}
+CODEGRAPH=${CODEGRAPH_BIN:-$(find_bin codegraph "$HOME/.volta/bin/codegraph" "$HOME/.local/bin/codegraph" "$HOME/.bun/bin/codegraph" /usr/local/bin/codegraph /opt/homebrew/bin/codegraph /home/linuxbrew/.linuxbrew/bin/codegraph)}
+GRAPHIFY=${GRAPHIFY_BIN:-$(find_bin graphify "$HOME"/Library/Python/*/bin/graphify "$HOME/.local/bin/graphify" /usr/local/bin/graphify /opt/homebrew/bin/graphify /home/linuxbrew/.linuxbrew/bin/graphify)}
 
 here() { git rev-parse --show-toplevel 2>/dev/null; }
 
@@ -30,10 +30,12 @@ main_root() {
 # git emits worktree paths raw, so a path containing a space breaks `awk '{print $2}'`.
 worktrees() { git -C "$1" worktree list --porcelain | sed -n 's/^worktree //p'; }
 short() { echo "$1" | sed "s|^$HOME|~|"; }
-mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+# GNU first: GNU stat reads -f as "filesystem" and prints its status before failing.
+mtime() { t=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null); case $t in ''|*[!0-9]*) echo 0;; *) echo "$t";; esac; }
 
-# APFS/btrfs reflink: a 251MB index copies in ~4ms and shares blocks until written.
-clone() { cp -c "$1" "$2" 2>/dev/null || cp --reflink=auto "$1" "$2" 2>/dev/null || cp "$1" "$2"; }
+# btrfs/XFS/APFS reflink: a 251MB index copies in ~4ms and shares blocks until written.
+# GNU first: older GNU cp takes -c as --preserve=context and makes a full copy.
+clone() { cp --reflink=auto "$1" "$2" 2>/dev/null || cp -c "$1" "$2" 2>/dev/null || cp "$1" "$2"; }
 
 # 0 = seeded, 1 = nothing to do, 2 = tried and failed
 seed_codegraph() {
@@ -134,9 +136,18 @@ cmd_ensure() {
     # Only a session in main refreshes main's graph; a worktree must not rebuild it.
     graphify_refresh_main "$main"
   fi
-  [ -d "$wt/.codegraph" ] && [ -n "$CODEGRAPH" ] && \
-    ( cd "$wt" && nohup nice -n 10 "$CODEGRAPH" sync >/dev/null 2>&1 & ) >/dev/null 2>&1
+  codegraph_sync_bg "$wt"
   exit 0
+}
+
+codegraph_sync_bg() {
+  wt=$1
+  [ -d "$wt/.codegraph" ] && [ -n "$CODEGRAPH" ] || return 0
+  lock="$wt/.codegraph/.sync.lock"
+  find "$lock" -maxdepth 0 -mmin +60 -exec rmdir {} \; 2>/dev/null
+  # Two sessions opening the same worktree would otherwise run two syncs into one SQLite file.
+  mkdir "$lock" 2>/dev/null || return 0
+  ( cd "$wt" && nohup nice -n 10 sh -c '"$0" sync; rmdir .codegraph/.sync.lock 2>/dev/null' "$CODEGRAPH" >/dev/null 2>&1 & ) >/dev/null 2>&1
 }
 
 cmd_status() {

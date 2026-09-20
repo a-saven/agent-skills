@@ -1,0 +1,24 @@
+#!/bin/sh
+# Status line: context usage from Claude Code's own numbers, plus a handoff hint at the
+# threshold. Copy to ~/.claude/statusline-ctx.sh and set in ~/.claude/settings.json:
+#   "statusLine": {"type": "command", "command": "sh ~/.claude/statusline-ctx.sh"}
+# Already have a status line? Keep it and merge the two marked steps into it — they
+# only need the JSON your script already reads.
+set -u
+input=$(cat 2>/dev/null) || exit 0
+pct=$(printf '%s' "$input" | grep -o '"used_percentage" *: *[0-9]*' | head -n 1 | grep -o '[0-9]*$')
+[ -n "$pct" ] || exit 0
+sid=$(printf '%s' "$input" | grep -o '"session_id" *: *"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+threshold=${AGENT_SKILLS_HANDOFF_PCT:-50}
+
+# 1. Share the fresh number with hooks/context-nudge.sh (it prefers this over its transcript estimate).
+tmp=${TMPDIR:-/tmp}; tmp=${tmp%/}
+case $sid in
+  ''|*[!A-Za-z0-9._-]*) ;;
+  *) printf '%s %s\n' "$(date +%s)" "$pct" > "$tmp/agent-skills-ctx-$sid" 2>/dev/null ;;
+esac
+
+# 2. Render.
+line="ctx ${pct}%"
+[ "$pct" -ge "$threshold" ] 2>/dev/null && line="$line → /handoff"
+printf '%s\n' "$line"

@@ -1,0 +1,251 @@
+#!/bin/sh
+# check — lint this repo: frontmatter, references, shell syntax, tests, plugin validate, JSON.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+strict=no; budget=no
+for a in "$@"; do
+  case $a in
+    --strict) strict=yes;;
+    --budget) budget=yes;;
+    -h|--help) echo "usage: bin/check [--strict] [--budget]   (per-agent token counts of a finished session: bin/crew-cost)"; exit 0;;
+    *) echo "unknown option: $a (expected --strict, --budget)"; exit 2;;
+  esac
+done
+
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+tab=$(printf '\t')
+pass=0; warn=0; fail=0; skip=0
+have_py=no; command -v python3 >/dev/null 2>&1 && have_py=yes
+
+row() {
+  case $1 in
+    PASS) pass=$((pass + 1));;
+    WARN) warn=$((warn + 1));;
+    FAIL) fail=$((fail + 1));;
+    SKIP) if [ $strict = yes ]; then fail=$((fail + 1)); set -- FAIL "$2" "$3 (strict)"; else skip=$((skip + 1)); fi;;
+  esac
+  printf '%-4s  %-15s %s\n' "$1" "$2" "$3"
+}
+rows() { while IFS=$tab read -r s n d; do row "$s" "$n" "$d"; done < "$1"; }
+indent() { sed 's/^/        /' "$1"; }
+
+# 1+2: frontmatter rules and references/<file>.md links
+if [ $have_py = yes ]; then
+  python3 - > "$tmp/fm" <<'PY'
+import glob, os, re, sys
+try:
+    import yaml
+    mode = ""
+except ImportError:
+    yaml = None
+    mode = " (regex fallback)"
+
+DESC = re.compile(r'^description: "((?:[^"\\]|\\.)*)"$')
+MEMORY = {"user", "project", "local"}
+MODEL = {"inherit", "haiku", "sonnet", "opus"}
+EFFORT = {"low", "medium", "high", "xhigh", "max"}
+
+def out(status, name, detail):
+    print(f"{status}\t{name}\t{detail}")
+
+def parse(raw):
+    if yaml:
+        return yaml.safe_load(raw)
+    d = {}
+    for line in raw.split("\n"):
+        m = re.match(r'^([A-Za-z_-]+):\s*(.*?)\s*$', line)
+        if m:
+            d[m.group(1)] = m.group(2)
+    return d
+
+def tools_of(v):
+    if isinstance(v, list):
+        return [str(t).strip() for t in v]
+    return [t.strip() for t in str(v).strip("[]").split(",") if t.strip()]
+
+files = sorted(glob.glob("skills/*/SKILL.md")) + sorted(glob.glob("agents/*.md"))
+missing_refs, ref_count = [], 0
+for f in files:
+    text = open(f, encoding="utf-8").read()
+    m = re.match(r'^---\n(.*?)\n---\n(.*)$', text, re.S)
+    if not m:
+        out("FAIL", "frontmatter", f"{f}: no frontmatter block")
+        continue
+    raw, body = m.group(1), m.group(2)
+    try:
+        fm = parse(raw)
+    except Exception as e:
+        out("FAIL", "frontmatter", f"{f}: does not parse ({str(e).splitlines()[0]})")
+        continue
+    if not isinstance(fm, dict):
+        out("FAIL", "frontmatter", f"{f}: frontmatter is not a mapping")
+        continue
+    expect = os.path.basename(os.path.dirname(f)) if f.startswith("skills/") else os.path.basename(f)[:-3]
+    errs, warns = [], []
+    if fm.get("name") != expect:
+        errs.append(f"name is {fm.get('name')!r}, expected {expect!r}")
+    desc_lines = [l for l in raw.split("\n") if l.startswith("description:")]
+    dm = DESC.match(desc_lines[0]) if len(desc_lines) == 1 else None
+    if not dm:
+        errs.append("description must be one double-quoted line")
+    else:
+        n = len(fm["description"]) if yaml else len(dm.group(1).replace('\\"', '"'))
+        if n > 1024:
+            errs.append(f"description {n} chars > 1024")
+        elif n > 500:
+            warns.append(f"description {n} chars > 500")
+    if "memory" in fm and str(fm["memory"]) not in MEMORY:
+        errs.append(f"memory: {fm['memory']!r} not in {sorted(MEMORY)}")
+    if "model" in fm and str(fm["model"]) not in MODEL:
+        errs.append(f"model: {fm['model']!r} not in {sorted(MODEL)}")
+    if "effort" in fm and str(fm["effort"]) not in EFFORT:
+        errs.append(f"effort: {fm['effort']!r} not in {sorted(EFFORT)}")
+    tools = tools_of(fm["tools"]) if "tools" in fm else None
+    if expect == "architect" and tools is not None and "Agent" not in tools:
+        errs.append("architect lists tools: without Agent (it must dispatch the investigators)")
+    if expect.endswith("-investigator"):
+        if tools is None:
+            errs.append("investigators must list tools: (without Agent) so they cannot nest")
+        elif "Agent" in tools:
+            errs.append("investigators must not have Agent in tools:")
+    for ref in sorted(set(re.findall(r'references/([A-Za-z0-9_.-]+\.md)', body))):
+        ref_count += 1
+        if not os.path.exists(os.path.join(os.path.dirname(f), "references", ref)):
+            missing_refs.append(f"{f} -> references/{ref}")
+    if errs:
+        out("FAIL", "frontmatter", f"{f}: " + "; ".join(errs + warns) + mode)
+    elif warns:
+        out("WARN", "frontmatter", f"{f}: " + "; ".join(warns) + mode)
+    else:
+        out("PASS", "frontmatter", f"{f}{mode}")
+for r in missing_refs:
+    out("FAIL", "references", f"{r} missing")
+if not missing_refs:
+    out("PASS", "references", f"{ref_count} references/*.md links resolve")
+PY
+  rows "$tmp/fm"
+else
+  row SKIP frontmatter "python3 not installed"
+  row SKIP references "python3 not installed"
+fi
+
+# 3: shell syntax by shebang
+find_scripts() {
+  for f in bin/* hooks/*.sh install.sh templates/*.sh.example evals/*/*.sh; do [ -f "$f" ] && echo "$f"; done
+  [ -d tests ] && find tests -name '*.sh' -type f | sort
+  return 0
+}
+find_scripts | while IFS= read -r f; do
+  case $(head -n 1 "$f") in
+    '#!'*bash*) sh_bin=bash;;
+    '#!'*sh*) sh_bin=sh;;
+    *) printf 'SKIP\tsyntax\t%s (no sh/bash shebang)\n' "$f"; continue;;
+  esac
+  if "$sh_bin" -n "$f" 2> "$tmp/err"; then
+    printf 'PASS\tsyntax\t%s (%s -n)\n' "$f" "$sh_bin"
+  else
+    printf 'FAIL\tsyntax\t%s: %s\n' "$f" "$(head -n 1 "$tmp/err" | sed "s|^$f: ||")"
+  fi
+done > "$tmp/syntax"
+rows "$tmp/syntax"
+
+# 4: test scripts and memory-lint fixtures
+run_script() {
+  if [ -x "$1" ]; then "$1" "${2:-}"; else sh "$1" "${2:-}"; fi
+}
+for t in tests/hooks/run.sh tests/install/run.sh tests/crew-cost/run.sh; do
+  if [ ! -f "$t" ]; then row SKIP tests "$t not found"; continue; fi
+  if [ "$t" = tests/crew-cost/run.sh ] && [ $have_py = no ]; then row SKIP tests "$t (python3 not installed)"; continue; fi
+  if run_script "$t" > "$tmp/out" 2>&1; then
+    row PASS tests "$t ($(grep -c '^PASS' "$tmp/out" || true) cases)"
+  else
+    row FAIL tests "$t"; indent "$tmp/out"
+  fi
+done
+good=tests/fixtures/memory-good/MEMORY.md; bad=tests/fixtures/memory-bad/MEMORY.md
+if [ ! -f bin/memory-lint ]; then
+  row SKIP memory-lint "bin/memory-lint not found"
+else
+  if [ ! -f "$good" ]; then row SKIP memory-lint "$good not found"
+  elif run_script bin/memory-lint "$good" > "$tmp/out" 2>&1; then row PASS memory-lint "accepts $good"
+  else row FAIL memory-lint "rejects $good"; indent "$tmp/out"; fi
+  if [ ! -f "$bad" ]; then row SKIP memory-lint "$bad not found"
+  elif run_script bin/memory-lint "$bad" > "$tmp/out" 2>&1; then row FAIL memory-lint "accepts $bad (expected exit 1)"
+  else row PASS memory-lint "rejects $bad ($(wc -l < "$tmp/out" | tr -d ' ') messages)"; fi
+  # Size caps and --prune are exercised on generated files so the committed fixture stays small.
+  { head -n 3 "$good"; i=0; while [ "$i" -lt 205 ]; do i=$((i + 1)); printf -- '- 2026-01-01 [pad] lesson %03d keeps the line long enough to pass twenty-five kilobytes in total — verified-by: wc -lc — evidence: this file — recheck: never\n' "$i"; done; } > "$tmp/big.md"
+  if run_script bin/memory-lint "$tmp/big.md" > "$tmp/out" 2>&1 || ! grep -q 'max 200' "$tmp/out" || ! grep -q 'max 25600' "$tmp/out"; then row FAIL memory-lint "generated 208-line file should trip both caps"; indent "$tmp/out"
+  else row PASS memory-lint "rejects a generated 208-line / 33 KB file (both caps)"; fi
+  { head -n 3 "$good"; i=0; while [ "$i" -lt 61 ]; do i=$((i + 1)); printf -- '- 2026-01-01 [pad] lesson %03d — verified-by: x — evidence: none — recheck: never\n' "$i"; done; printf 'RETRACTED 2025-01-15 (old): - 2024-12-01 [pad] gone — verified-by: x — evidence: none — recheck: never\nRETRACTED 2099-01-01 (new): - 2098-12-01 [pad] recent — verified-by: x — evidence: none — recheck: never\n'; } > "$tmp/prune.md"
+  bin/memory-lint --prune "$tmp/prune.md" > "$tmp/out" 2>&1 || true
+  if [ "$(grep -c '^RETRACTED' "$tmp/prune.md")" -eq 1 ] && grep -q '^RETRACTED 2099' "$tmp/prune.md"; then row PASS memory-lint "--prune drops only the retraction older than 90 days"
+  else row FAIL memory-lint "--prune"; indent "$tmp/out"; fi
+fi
+
+# 5: claude plugin validate. Beside marketplace.json the CLI validates only the marketplace, and it
+# refuses symlinked hooks/, so plugin.json + hooks/ are copied into a plugin-only tree first.
+if command -v claude >/dev/null 2>&1; then
+  validate() {
+    if claude plugin validate --strict "$1" > "$tmp/out" 2>&1; then row PASS plugin-validate "$2"
+    else row FAIL plugin-validate "$2"; indent "$tmp/out"; fi
+  }
+  if [ -f .claude-plugin/plugin.json ]; then
+    mkdir -p "$tmp/plug/.claude-plugin"
+    cp .claude-plugin/plugin.json "$tmp/plug/.claude-plugin/"
+    [ -d hooks ] && cp -R hooks "$tmp/plug/"
+    validate "$tmp/plug" "plugin.json + hooks/"
+  else
+    row SKIP plugin-validate "no .claude-plugin/plugin.json"
+  fi
+  for target in skills agents .claude-plugin/marketplace.json; do
+    if [ -e "$target" ]; then validate "$target" "$target"; else row SKIP plugin-validate "$target not found"; fi
+  done
+else
+  row SKIP plugin-validate "claude not installed"
+fi
+
+# 6: JSON files
+for d in .claude-plugin hooks; do
+  n=0
+  for f in "$d"/*.json; do
+    [ -f "$f" ] || continue
+    n=$((n + 1))
+    if [ $have_py = no ]; then row SKIP json "$f (python3 not installed)"
+    elif python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$f" 2> "$tmp/err"; then row PASS json "$f"
+    else row FAIL json "$f: $(tail -n 1 "$tmp/err")"; fi
+  done
+  [ $n -eq 0 ] && row SKIP json "$d/ has no .json files"
+done
+
+if [ $budget = yes ]; then
+  if [ $have_py = yes ]; then
+    python3 - <<'PY'
+import glob, re
+files = sorted(glob.glob("skills/*/SKILL.md")) + sorted(glob.glob("agents/*.md"))
+print()
+print(f"{'file':32} {'desc':>6} {'body':>7} {'~tok desc':>10} {'~tok body':>10}")
+td = tb = 0
+for f in files:
+    text = open(f, encoding="utf-8").read()
+    m = re.match(r'^---\n(.*?)\n---\n(.*)$', text, re.S)
+    raw, body = (m.group(1), m.group(2)) if m else ("", text)
+    dm = re.search(r'^description: "((?:[^"\\]|\\.)*)"$', raw, re.M)
+    d = len(dm.group(1).replace('\\"', '"')) if dm else 0
+    b = len(body)
+    td += d; tb += b
+    print(f"{f:32} {d:6} {b:7} {d // 4:10} {b // 4:10}")
+print(f"{'total':32} {td:6} {tb:7} {td // 4:10} {tb // 4:10}")
+print("~tok = chars/4, an estimate. Descriptions load in every session; bodies only when invoked.")
+print("For the measured always-on figure run: claude --plugin-dir . plugin details agent-skills")
+print("For what a finished session actually spent per agent type run: bin/crew-cost [transcript.jsonl] (counts, no prices)")
+PY
+  else
+    echo "budget: python3 not installed"
+  fi
+fi
+
+echo
+echo "check: $pass passed, $fail failed, $skip skipped, $warn warnings"
+[ $fail -eq 0 ]

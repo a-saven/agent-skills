@@ -1,6 +1,6 @@
 ---
 name: qa-run
-description: Orchestrate a manual-QA pass (functional or design) on the running app in ANY project — a WEB app in a browser or a NATIVE iOS app in the Simulator. Detects whether the project is a single app or a monorepo, remembers a dev URL and login credentials PER APP, plus an optional read-only DB, asking only for what isn't saved yet (and remembering "declined" so it never re-asks). Then scopes the run to the app(s) being tested and invokes the manual-qa agent. Use when the user asks to "QA this", "verify the app works", "test the flow", "check if X works / looks right in the browser", "test the native app / in the simulator", or invokes /qa-run. Runs in the MAIN thread (it needs to ask the user questions); it sets up context, then delegates the click-through to the manual-qa subagent. Also supports an unattended task mode where a parent injects a per-task URL/port (or Simulator UDID) + worktree and no questions are asked.
+description: "Sets up a manual-QA pass on the running app (web browser or native iOS Simulator): gathers and remembers per-app URL, credentials and optional read-only DB, then delegates the click-through to the manual-qa agent. Use on \"QA this\", \"verify the app works\", \"test the flow\", \"check if X works / looks right in the browser\", \"test the native app / in the simulator\", or /qa-run."
 ---
 
 # qa-run — per-project QA orchestrator
@@ -78,7 +78,7 @@ The interactive steps below apply only to **human-initiated** runs (someone asks
 
 10. **DB cross-check** (only if `db.status:"set"`): after manual-qa confirms a UI write, run the configured read-only SQL — via the DB MCP (`access:"mcp"`) or `psql "<url>" -c "…"` (`access:"psql"`) — to confirm the row changed; fold into the report. Read-only — never mutate. If `env:"prod"`, double down: SELECT only.
 
-11. **Report.** Relay manual-qa's verdict (PASS/FAIL/PARTIAL) + findings/differences + anything unverified, plus the DB confirmation if run. For multiple in-scope apps, one section per app.
+11. **Report.** Relay manual-qa's verdict (PASS/FAIL/PARTIAL) + findings/differences + anything unverified, plus the DB confirmation if run, and relay its `Lessons:` line. For multiple in-scope apps, one section per app.
 
 ## Rules
 
