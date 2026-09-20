@@ -141,7 +141,7 @@ rm -f "$repo/.claude/handoffs/2026-09-14-0900-feat-example.md"
 mkdir -p "$work/plain"
 out=$(load l7 "$work/plain"); rc=$?
 [ "$rc" -eq 0 ] && [ -z "$out" ] && pass "load: outside a git repo exits 0 silently" || flunk "load: non-git" "rc=$rc out=$out"
-out=$(printf 'garbage' | sh "$loader"); rc=$?
+out=$(printf 'garbage' | CLAUDE_PROJECT_DIR="$work/plain" sh "$loader"); rc=$?
 [ "$rc" -eq 0 ] && [ -z "$out" ] && pass "load: malformed stdin exits 0 silently" || flunk "load: malformed stdin" "rc=$rc out=$out"
 
 # --- memory-guard.sh --------------------------------------------------------
