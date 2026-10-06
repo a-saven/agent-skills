@@ -51,11 +51,12 @@ Route each node to the cheapest tier that can meet its acceptance criteria **on 
 
 | Tier | Use for | Never use for |
 |---|---|---|
-| **Opus / yourself** | Architecture decisions, ambiguous requirements, cross-cutting refactors, security-sensitive code, debugging with an unknown root cause, reviewing Sonnet output on critical paths, writing briefs for complex work | Mechanical edits, summarization, formatting |
-| **Sonnet** | Implementing well-specified features, writing tests against defined behavior, standard bugfixes with a repro, reviewing Haiku output, non-trivial refactors inside one module, writing docs from code | Open-ended design, anything whose spec says "figure out the right approach" |
-| **Haiku** | Mechanical transforms (try `ast-grep --rewrite` first; Haiku for the remainder), log and CI-output triage, summarizing files or diffs into context bundles, boilerplate from an exact template, lint and format fixes | Anything needing judgment about correctness beyond the literal instruction |
+| **Fable** | Very large synthesis or design across many inputs. First compress the evidence into a bundle (findings, file:line refs, options, constraints) and hand Fable the bundle, never the raw repo. Also when Opus has failed twice | Anything Opus can do; raw-repo reading; execution |
+| **Opus** (default orchestrator) | Planning, decomposition, research and synthesis of normal size, architecture, security-critical review, debugging with an unknown root cause, writing briefs for complex work | Mechanical edits, summarization, formatting |
+| **Sonnet** | Implementing well-specified features, writing tests against defined behavior, standard bugfixes with a repro, docs from code, reviewing Haiku output | Open-ended design, anything whose spec says "figure out the right approach" |
+| **Haiku** | Mechanical edits (try `ast-grep --rewrite` first), lookups, log and CI triage, boilerplate from an exact template, lint and format fixes, and ALL PR plumbing: push, open PR, wait for CI/review bots, collect threads | Anything needing judgment about correctness beyond the literal instruction |
 
-The tier names are Claude's (Opus / Sonnet / Haiku); on another provider map them to its strongest / mid-priced / cheapest capable models — the routing logic is identical.
+The tier names are Claude's (Fable / Opus / Sonnet / Haiku); on another provider map them to its strongest / next / mid-priced / cheapest capable models — the routing logic is identical.
 
 ### Routing to the specialist team (when the `agents/` pack from this repo is installed)
 
@@ -65,6 +66,8 @@ Tier answers *how much model* a node gets; the specialist answers *what kind of 
 - test-writing nodes → `automation-qa`
 - review nodes → `backend-reviewer` / `frontend-reviewer` / `security-reviewer` (reviewer at least one tier above the author on critical paths, as in Phase 4)
 - live verification of a running app → `manual-qa` (via the `qa-run` skill)
+
+Always pass `model` on every spawn; per-invocation model beats agent frontmatter. Planning/research/synthesis nodes get `opus`.
 
 This skill subsumes the `architect` agent's role: when you orchestrate, YOU are the planning authority — don't also invoke `architect`. It remains useful standalone, for sessions where someone wants a plan produced by a subagent without full orchestration.
 
@@ -89,6 +92,13 @@ OUTPUT CONTRACT: unified diff or file list + a ≤10-line summary
 
 A subagent that returns prose instead of meeting the output contract gets one correction, then escalates.
 
+## Batch limits
+
+- At most 5 PRs in flight and 6 concurrent subagents.
+- One owner per hot file per wave.
+- One push per green local check run; CI confirms, it is not a test runner.
+- The orchestrator never pushes, opens PRs, or polls CI itself; that is Haiku plumbing.
+
 ## Phase 3 — Execute in parallel
 
 - Launch every node with no pending dependencies **simultaneously**, each in its assigned worktree.
@@ -112,7 +122,8 @@ The reviewer must sit at least one tier above the author on critical paths.
 - **Summarize downward.** Compress anything you forward to a subagent — by a cheap tier if the source is large. A wiki article or a set of exact structural hits gives the same orientation as a file dump at a fraction of the cost.
 - **Summarize upward.** Reduce anything a subagent returns to its decision-relevant core before persisting or forwarding it.
 - **Re-hydration is a budget line.** On wake, load the task record, the DAG state, and the node summaries. Don't reload raw transcripts unless a specific node's history is needed to resolve a failure, and don't re-read source files to "remember" the repo.
-- One retry per tier, then escalate: Haiku → Sonnet → you → human.
+- **Output is context.** Run checks through quiet wrappers (one line per pass, tail on failure), read CI via `--log-failed | tail`, and pipe long output through tail/grep.
+- One retry per tier, then escalate: Haiku → Sonnet → Opus → Fable → human.
 
 ## House rules
 
@@ -126,6 +137,8 @@ Where a repo has no `CLAUDE.md`, these defaults apply, and offering to write one
 - Runtime **Bun**. Edge services **Hono on Vercel**. Backend services **Elysia on Railway**. Mobile **Expo**. API clients **Eden Treaty** — never a hand-rolled fetch wrapper against Elysia.
 - Persistence: Postgres, with pgvector where embeddings are involved.
 - **Coverage floor 80%**, enforced per surface: `bun test` for unit and integration, **Playwright** for web e2e, **Maestro** for mobile flows. A node whose acceptance criteria include code changes includes the tests covering them — tests are part of the node, not a separate favor.
+
+- **Comments:** don't write explanatory comments; keep only a ≤1-line "why" where the code can't say it. When editing code, shrink or drop verbose/stale comments in the touched hunks only; never sweep untouched files.
 
 Regardless of source: match existing repo patterns before inventing new ones. If a pattern genuinely has to change, that's a Complex-class decision — you design it, and the humans hear about it.
 
