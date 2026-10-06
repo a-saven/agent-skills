@@ -97,6 +97,8 @@ A subagent that returns prose instead of meeting the output contract gets one co
 - At most 5 PRs in flight and 6 concurrent subagents.
 - One owner per hot file per wave.
 - One push per green local check run; CI confirms, it is not a test runner.
+- Open PRs as drafts while iterating (CI skips drafts where the repo supports it); mark ready once, when local checks are green.
+- Clean up as you go: after a merge, remove its worktree and delete its local and remote branch.
 - The orchestrator never pushes, opens PRs, or polls CI itself; that is Haiku plumbing.
 
 ## Phase 3 — Execute in parallel
